@@ -65,79 +65,43 @@ int BeamSearch(State &Result) { // Finds a sorting network by slowly reducing th
 				return Result.CurrentLevel;
 			}
 
-			// If we can simply do the 'inverse' opperation to the last, then do it.
-			// ### THIS WAS ALLREADY DONE IN THE OLD CODE - IN LINUX!!!! ###
-			int N1, N2;
-			if (USE_ASYMITRY_HEURISTIC == true && Level >= 1) {
-				N1 = Beam[I][Level - 1].Op1;
-				N2 = Beam[I][Level - 1].Op2;
-			}
-			if (USE_ASYMITRY_HEURISTIC == true && Level >= 1
-					&& N1 != (NET_SIZE - 1) - N1 && N1 != (NET_SIZE - 1) - N2
-					&& N2 != (NET_SIZE - 1) - N1 && N2 != (NET_SIZE - 1) - N2
-					&& SuccOps[(NET_SIZE - 1) - N2][(NET_SIZE - 1) - N1] == 1) {
+			// For each of the living successors get a score using ND search.
+			// URL: https://stackoverflow.com/questions/47758947/c-openmp-nested-loops-where-the-inner-iterator-depends-on-the-outer-one
+			//for (N1=0;N1<NET_SIZE-1;N1++) {
+			//	for (N2=N1+1;N2<NET_SIZE;N2++) {
+			#pragma omp parallel for
+			for (int k = 0; k < NET_SIZE * (NET_SIZE - 1) / 2; k++) {
 
-				// Make a copy.
-				State *TempStatePtr = new State;
-				*TempStatePtr = BeamState;
-				TempStatePtr->UpdateState((NET_SIZE - 1) - N2,
-						(NET_SIZE - 1) - N1);  // Update it.
+				// Get N1 and N2.
+				int N1, N2;
+				N1 = k / NET_SIZE;
+				N2 = k % NET_SIZE;
+				if (N2 <= N1) {
+					N1 = NET_SIZE - N1 - 2;
+					N2 = NET_SIZE - N2 - 1;
+				}
 
-				// Score it.
-				double score = TempStatePtr->ScoreState();
+				// If the operation is allowed, then find how well it does.
+				if (SuccOps[N1][N2] == 1) {
 
-				delete TempStatePtr;
+					// Make a copy.
+					State *TempStatePtr = new State;
+					*TempStatePtr = BeamState;
+					TempStatePtr->UpdateState(N1, N2);     // Update it.
 
-				// Update the successors.
-				BeamSucc[NumBeamSucc].BeamIndex = I;
-				BeamSucc[NumBeamSucc].Op1 = (NET_SIZE - 1) - N2;
-				BeamSucc[NumBeamSucc].Op2 = (NET_SIZE - 1) - N1;
-				BeamSucc[NumBeamSucc].Score = score;
-				NumBeamSucc++;
-			}
+					// Score it.
+					double score = TempStatePtr->ScoreState();
 
-			// Just do normal then.
-			else {
+					delete TempStatePtr;
 
-				// For each of the living successors get a score using ND search.
-				// URL: https://stackoverflow.com/questions/47758947/c-openmp-nested-loops-where-the-inner-iterator-depends-on-the-outer-one
-				//for (N1=0;N1<NET_SIZE-1;N1++) {
-				//	for (N2=N1+1;N2<NET_SIZE;N2++) {
-				#pragma omp parallel for
-				for (int k = 0; k < NET_SIZE * (NET_SIZE - 1) / 2; k++) {
-
-					// Get N1 and N2.
-					int N1, N2;
-					N1 = k / NET_SIZE;
-					N2 = k % NET_SIZE;
-					if (N2 <= N1) {
-						N1 = NET_SIZE - N1 - 2;
-						N2 = NET_SIZE - N2 - 1;
-					}
-
-					// If the operation is allowed, then find how well it does.
-					if (SuccOps[N1][N2] == 1) {
-
-						// Make a copy.
-						State *TempStatePtr = new State;
-						*TempStatePtr = BeamState;
-						TempStatePtr->UpdateState(N1, N2);     // Update it.
-
-						// Score it.
-						double score = TempStatePtr->ScoreState();
-
-						delete TempStatePtr;
-
-						// Update the successors.
-						#pragma omp critical
-						{
-							BeamSucc[NumBeamSucc].BeamIndex = I;
-							BeamSucc[NumBeamSucc].Op1 = N1;
-							BeamSucc[NumBeamSucc].Op2 = N2;
-							BeamSucc[NumBeamSucc].Score = score;
-							NumBeamSucc++;
-						}
-
+					// Update the successors.
+					#pragma omp critical
+					{
+						BeamSucc[NumBeamSucc].BeamIndex = I;
+						BeamSucc[NumBeamSucc].Op1 = N1;
+						BeamSucc[NumBeamSucc].Op2 = N2;
+						BeamSucc[NumBeamSucc].Score = score;
+						NumBeamSucc++;
 					}
 
 				}

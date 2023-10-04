@@ -336,12 +336,13 @@ double State::ScoreState(void) { // Returns the average score (in number of comp
 
 	delete TempStatePtr;
 
-	// Lets sort into ascending order based on length using depth for ties.
+	// Lets sort into ascending order based on length (or depth) using depth (or length) for ties.
+	// NOTE: If DEPTH_WEIGHT < 0.5 we assume we are optimizing the length, else optimizing the depth.
 	// NOTE: Bubble sort OK for small N.
 	for (int I = 0; I < NUM_TEST_RUNS - 1; I++) {
 		for (int J = I + 1; J < NUM_TEST_RUNS; J++) {
-			if (Level[I] > Level[J]
-					|| (Level[I] == Level[J] && Depth[I] > Depth[J])) {
+			if ((DEPTH_WEIGHT < 0.5 && (Level[I] > Level[J] || (Level[I] == Level[J] && Depth[I] > Depth[J])))
+				|| (DEPTH_WEIGHT >= 0.5 && (Depth[I] > Depth[J] || (Depth[I] == Depth[J] && Level[I] > Level[J])))) {
 				int Temp = Level[I];
 				Level[I] = Level[J];
 				Level[J] = Temp;
@@ -352,46 +353,18 @@ double State::ScoreState(void) { // Returns the average score (in number of comp
 		}
 	}
 
-	// Do we want to find the (outlier-free) mean?
-	if (SCORE_USING_MEAN == true) {
-		int LevelSum = 0;
-		int DepthSum = 0;
-		for (int Test = 0; Test < (NUM_TEST_RUNS - NUM_TEST_MEAN_OUTLIERS);
-				Test++) {
-			LevelSum += Level[Test];
-			DepthSum += Depth[Test];
-		}
-		if (USE_DEPTH == true)
-			return (double) (LENGTH_WEIGHT * LevelSum)
-					+ ((double) DepthSum
-							/ (double) (NUM_TEST_RUNS - NUM_TEST_MEAN_OUTLIERS));
-		else
-			return (double) (LENGTH_WEIGHT * LevelSum);
+	// Find the means of the elites.
+	double LengthSum = 0;
+	double DepthSum = 0;
+	for (int Test = 0; Test < NUM_TEST_RUN_ELITES; Test++) {
+		LengthSum += Level[Test];
+		DepthSum += Depth[Test];
 	}
+	double MeanLength = ((double)LengthSum)/((double)NUM_TEST_RUN_ELITES);
+	double MeanDepth = ((double)DepthSum)/((double)NUM_TEST_RUN_ELITES);
 
-	// We must want to use the median then.
-	else {
-		if (USE_DEPTH == true) {
-			if (NUM_TEST_RUNS >= 2 && NUM_TEST_RUNS % 2 == 0)
-				return 0.5
-						* (double) ((LENGTH_WEIGHT
-								* (Level[NUM_TEST_RUNS / 2]
-										+ Level[(NUM_TEST_RUNS / 2) - 1]))
-								+ (Depth[NUM_TEST_RUNS / 2]
-										+ Depth[(NUM_TEST_RUNS / 2) - 1]));
-			else
-				return (double) ((LENGTH_WEIGHT * Level[NUM_TEST_RUNS / 2])
-						+ Depth[NUM_TEST_RUNS / 2]);
-		} else {
-			if (NUM_TEST_RUNS >= 2 && NUM_TEST_RUNS % 2 == 0)
-				return 0.5
-						* (double) ((LENGTH_WEIGHT
-								* (Level[NUM_TEST_RUNS / 2]
-										+ Level[(NUM_TEST_RUNS / 2) - 1])));
-			else
-				return (double) ((LENGTH_WEIGHT * Level[NUM_TEST_RUNS / 2]));
-		}
-	}
+	// Return the weighted score.
+	return ((1.0-DEPTH_WEIGHT)*MeanLength)+(DEPTH_WEIGHT*MeanDepth);
 
 } // End.
 

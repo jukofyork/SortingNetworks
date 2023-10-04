@@ -28,93 +28,102 @@
 
 using namespace std;
 
+// Maximum number of iterations to run for.
+#define MAX_ITERS				1000000						// Ctrl-C will exit anyway.
+
 // Number of elements to sort.
-#define NET_SIZE				18
+#define NET_SIZE				13
 
 // Number of states in beam ( < 2^16 ?).
-#define BEAM_SIZE				1000 //500
+#define BEAM_SIZE				20000
 
 // Number of tests per score run ( < 10 ?).
-#define NUM_TEST_RUNS			12
+#define NUM_TEST_RUNS			5
 
-// Set this to use the () mean, else we will use the median.
-#define SCORE_USING_MEAN		true
+// The number of "elites" we take the average of to get the scores.
+#define NUM_TEST_RUN_ELITES		1						// Must be in the range [1,NUM_TEST_RUNS].
 
-// If we choose to use mean to score, then we will ignore up to this many outliers.
-#define NUM_TEST_MEAN_OUTLIERS	2							// Must be < NUM_TEST_RUNS, can be 0.
-
-// Set this to use the asymmetry heuristic.
-#define USE_ASYMITRY_HEURISTIC	false					// Only works well for even N nets.
-
-// Set this to use depth at a tie breaker for scoring.
-#define USE_DEPTH				true
+// This weight we put on minimising the depth.
+// NOTE: If DEPTH_WEIGHT < 0.5 we assume we are optimizing the length, else optimizing the depth.
+#define DEPTH_WEIGHT			1.0 //0.0001
 
 // The target size of the network should be 1 less than best known.
 // URL: https://bertdobbelaere.github.io/sorting_networks.html
 #if NET_SIZE == 8
-#define WANTED 18
+#define LENGTH_UPPER_BOUND 19
+#define DEPTH_UPPER_BOUND  6
 #endif
 #if NET_SIZE == 9
-#define WANTED 24
+#define LENGTH_UPPER_BOUND 25
+#define DEPTH_UPPER_BOUND  7
 #endif
 #if NET_SIZE == 10
-#define WANTED 28
+#define LENGTH_UPPER_BOUND 29
+#define DEPTH_UPPER_BOUND  7
 #endif
 #if NET_SIZE == 11
-#define WANTED 34
+#define LENGTH_UPPER_BOUND 35
+#define DEPTH_UPPER_BOUND  8
 #endif
 #if NET_SIZE == 12
-#define WANTED 38
+#define LENGTH_UPPER_BOUND 39
+#define DEPTH_UPPER_BOUND  8
 #endif
 #if NET_SIZE == 13
-#define WANTED 44
+#define LENGTH_UPPER_BOUND 45
+#define DEPTH_UPPER_BOUND  9
 #endif
 #if NET_SIZE == 14
-#define WANTED 50
+#define LENGTH_UPPER_BOUND 51
+#define DEPTH_UPPER_BOUND  9
 #endif
 #if NET_SIZE == 15
-#define WANTED 55
+#define LENGTH_UPPER_BOUND 56
+#define DEPTH_UPPER_BOUND  9
 #endif
 #if NET_SIZE == 16
-#define WANTED 59
+#define LENGTH_UPPER_BOUND 60
+#define DEPTH_UPPER_BOUND  9
 #endif
 #if NET_SIZE == 17
-#define WANTED 70
+#define LENGTH_UPPER_BOUND 71
+#define DEPTH_UPPER_BOUND  10
 #endif
 #if NET_SIZE == 18
-#define WANTED 76
+#define LENGTH_UPPER_BOUND 77
+#define DEPTH_UPPER_BOUND  11
 #endif
 #if NET_SIZE == 19
-#define WANTED 84
+#define LENGTH_UPPER_BOUND 85
+#define DEPTH_UPPER_BOUND  11
 #endif
 #if NET_SIZE == 20
-#define WANTED 90
+#define LENGTH_UPPER_BOUND 91
+#define DEPTH_UPPER_BOUND  11
 #endif
 #if NET_SIZE == 21
-#define WANTED 98
+#define LENGTH_UPPER_BOUND 99
+#define DEPTH_UPPER_BOUND  12
 #endif
 #if NET_SIZE == 22
-#define WANTED 105
+#define LENGTH_UPPER_BOUND 106
+#define DEPTH_UPPER_BOUND  12
 #endif
 #if NET_SIZE == 23
-#define WANTED 113
+#define LENGTH_UPPER_BOUND 114
+#define DEPTH_UPPER_BOUND  12
 #endif
 #if NET_SIZE == 24
-#define WANTED 119
+#define LENGTH_UPPER_BOUND 120
+#define DEPTH_UPPER_BOUND  12
 #endif
 
-// Maximum number of iterations to run for.
-#define MAX_ITERS			1000000						// Ctrl-C will exit anyway.
+// Maximum operations to store - overflow error will occur if this is exceeded.
+#define MAX_OPS					(LENGTH_UPPER_BOUND*2)
 
 // Basic parameters created from above.
-#define BRANCHING_FACTOR	((NET_SIZE*(NET_SIZE-1))/2) // Of first level!
-#define NUM_TESTS			(1<<NET_SIZE)				// Test size (Zero/One theorem...)
-
-// Maximum operations to store - overflow error will occur if this is exceeded.
-#define MAX_OPS				(WANTED*2)
-
-// This should be bigger than 2x the expected depth (for median needs 2x).
-#define LENGTH_WEIGHT		100
+#define BRANCHING_FACTOR		((NET_SIZE*(NET_SIZE-1))/2) // Of first level!
+#define NUM_TESTS				(1<<NET_SIZE)				// Test size (Zero/One theorem...)
 
 // =============================================================================
 
@@ -187,13 +196,6 @@ int main(void) {
 	// For timing.
 	clock_t StartTime = clock();
 
-	int Iter;
-
-	int Level;
-	int MeanLevel = 0;
-	int BestLevel = MAX_OPS;
-	int WorstLevel = 0;
-
 	// Set up the signal handler.
 	signal(SIGINT, Signal_INT);
 
@@ -203,25 +205,22 @@ int main(void) {
 	// Init the lookup tables.
 	InitLookups();
 
-	cout << "NET_SIZE               = " << NET_SIZE << endl;
-	cout << "BEAM_SIZE              = " << BEAM_SIZE << endl;
-	cout << "NUM_TEST_RUNS          = " << NUM_TEST_RUNS << endl;
-	cout << "SCORE_USING            = "
-			<< (SCORE_USING_MEAN == true ? "Mean" : "Median") << endl;
-	if (SCORE_USING_MEAN == true)
-		cout << "NUM_TEST_MEAN_OUTLIERS = " << NUM_TEST_MEAN_OUTLIERS << endl;
-	cout << "USE_ASYMITRY_HEURISTIC = "
-			<< (USE_ASYMITRY_HEURISTIC == true ? "Yes" : "No") << endl;
-	cout << "USE_DEPTH              = " << (USE_DEPTH == true ? "Yes" : "No")
-			<< endl;
-	cout << "WANTED                 = " << WANTED << endl;
+	cout << "NET_SIZE            = " << NET_SIZE << endl;
+	cout << "BEAM_SIZE           = " << BEAM_SIZE << endl;
+	cout << "NUM_TEST_RUNS       = " << NUM_TEST_RUNS << endl;
+	cout << "NUM_TEST_RUN_ELITES = " << NUM_TEST_RUN_ELITES << endl;
+	cout << "DEPTH_WEIGHT        = " << DEPTH_WEIGHT << endl;
+	cout << "LENGTH_UPPER_BOUND  = " << LENGTH_UPPER_BOUND << endl;
+	cout << "DEPTH_UPPER_BOUND   = " << DEPTH_UPPER_BOUND << endl;
 	cout << endl;
 
+	int Iter;
 	for (Iter = 0; Iter < MAX_ITERS && ExitFlag == 0; Iter++) {
 
 		// Do the Beam search.
 		cout << "Iteration " << (Iter + 1) << ':' << endl;
-		Level = BeamSearch(S);
+		int Length = BeamSearch(S);
+		int Depth = S.GetDepth();
 
 		// Print the operations.
 		for (int I = 0; I < S.CurrentLevel; I++) {
@@ -230,33 +229,22 @@ int main(void) {
 		}
 
 		// Print depth at end.
-		cout << "+Length: " << S.CurrentLevel << endl;
-		cout << "+Depth : " << S.GetDepth() << endl;
-
+		cout << "+Length: " << Length << endl;
+		cout << "+Depth : " << Depth << endl;
 		cout << endl;
 
-		// Update stats.
-		MeanLevel += Level;
-		if (Level < BestLevel)
-			BestLevel = Level;
-		if (Level > WorstLevel)
-			WorstLevel = Level;
-
-		if (Level <= WANTED) {
+		// Exit if we have found a new upper bound.
+		if (Length < LENGTH_UPPER_BOUND || Depth < DEPTH_UPPER_BOUND) {
 			Iter++;
 			break;
 		}
 
 	}
 
-	cout << "Total Iters  : " << Iter << endl;
-	cout << "Total Time   : "
+	cout << "Total Iterations  : " << Iter << endl;
+	cout << "Total Time        : "
 			<< (double) (clock() - StartTime) / (double) CLOCKS_PER_SEC
 			<< " seconds" << endl;
-	cout << "Wanted Level : " << WANTED << endl;
-	cout << "Mean Level   : " << ((double) MeanLevel / (double) Iter) << endl;
-	cout << "Best Level   : " << BestLevel << endl;
-	cout << "Worst Level  : " << WorstLevel << endl;
 
 	return 0;
 
