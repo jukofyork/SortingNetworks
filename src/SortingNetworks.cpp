@@ -32,20 +32,20 @@ using namespace std;
 #define MAX_ITERS				1000000						// Ctrl-C will exit anyway.
 
 // Number of elements to sort.
-#define NET_SIZE				13
+#define NET_SIZE				17
 
 // Number of states in beam ( < 2^16 ?).
-#define BEAM_SIZE				20000
+#define BEAM_SIZE				( ((NET_SIZE*(NET_SIZE-1))/2) * ((NET_SIZE*(NET_SIZE-1))/2) ) //20000
 
 // Number of tests per score run ( < 10 ?).
-#define NUM_TEST_RUNS			5
+#define NUM_TEST_RUNS			5 //5
 
 // The number of "elites" we take the average of to get the scores.
-#define NUM_TEST_RUN_ELITES		1						// Must be in the range [1,NUM_TEST_RUNS].
+#define NUM_TEST_RUN_ELITES		4 //5 //1						// Must be in the range [1,NUM_TEST_RUNS].
 
 // This weight we put on minimising the depth.
 // NOTE: If DEPTH_WEIGHT < 0.5 we assume we are optimizing the length, else optimizing the depth.
-#define DEPTH_WEIGHT			1.0 //0.0001
+#define DEPTH_WEIGHT			0.0001 //0.0001 //0.9999 // 0.0001 // 1.0 //0.0001
 
 // The target size of the network should be 1 less than best known.
 // URL: https://bertdobbelaere.github.io/sorting_networks.html
@@ -220,6 +220,11 @@ int main(void) {
 		// Do the Beam search.
 		cout << "Iteration " << (Iter + 1) << ':' << endl;
 		int Length = BeamSearch(S);
+
+		//cout << "Before: " << S.GetDepth() << endl;
+		S.MinimiseDepth();
+		//cout << "After: " << S.GetDepth() << endl;
+
 		int Depth = S.GetDepth();
 
 		// Print the operations.

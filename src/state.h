@@ -92,6 +92,7 @@ public:
 	void UpdateState(int Op1, int Op2);
 	void DoRandomTransition(void);
 	void PrintState(void);
+	void MinimiseDepth(void);
 	int GetDepth(void);
 	double ScoreState(void);
 	int FindSuccessors(int SuccOps[NET_SIZE][NET_SIZE]);
@@ -265,6 +266,98 @@ void State::PrintState(void) { // Print the current state (Debugging...).
 
 // --------------------------------------------------------------------------
 
+void State::MinimiseDepth(void) {
+
+	// Used to update which have been used so far.
+	int UsedOps1[NET_SIZE];
+	int UsedOps2[NET_SIZE];
+
+	// This is used to rerun from the start whenever we alter.
+	// NOTE: This is needed as sometimes an operation can be pulled back and then pulled back again!
+	restart:
+	bool altered = false;
+
+	// First clear ready for putting 1's into.
+	for (int I = 0; I < NET_SIZE; I++)
+		UsedOps1[I] = 0;
+
+	// For each operation test for when it is interdependent on lower opp.
+	for (int L1 = 0; L1 < CurrentLevel; L1++) {
+
+		// See if we have this op already.
+		if (UsedOps1[Operations[L1][0]] == 1 || UsedOps1[Operations[L1][1]] == 1) {
+
+			// First clear ready for putting 1's into.
+			for (int I = 0; I < NET_SIZE; I++)
+				UsedOps2[I] = 0;
+
+			// Test the next block.
+			for (int L2 = L1; L2 < CurrentLevel; L2++) {
+
+				// Break when we find the next parallel section's start.
+				if (UsedOps2[Operations[L2][0]] == 1 || UsedOps2[Operations[L2][1]] == 1)
+					break;
+
+				// If we have found an operation we can move down into the previous block, swap it and restart.
+				if (UsedOps1[Operations[L2][0]] != 1 && UsedOps1[Operations[L2][1]] != 1) {
+
+					// Add to the level 1 used set.
+					UsedOps1[Operations[L2][0]] = 1;
+					UsedOps1[Operations[L2][1]] = 1;
+
+					// Swap the operations.
+					byte TempOp1=Operations[L1][0];
+					byte TempOp2=Operations[L1][1];
+					Operations[L1][0]=Operations[L2][0];
+					Operations[L1][1]=Operations[L2][1];
+					Operations[L2][0]=TempOp1;
+					Operations[L2][1]=TempOp2;
+
+					// Set the L2 loop index to be just after the new operation we have added.
+					// NOTE: This will ++ in the for loop and start +1 after the old L1.
+					L2=L1;
+
+					// Increment L1 index to account for the operation we swapped in.
+					L1++;
+
+					// Re-clear ready for putting 1's into.
+					for (int I = 0; I < NET_SIZE; I++)
+						UsedOps2[I] = 0;
+
+					// Set to rerun.
+					altered = true;
+
+					// Restart the L2 loop.
+					continue;
+
+				}
+
+				// These are set at the beginning of a new parallel section.
+				UsedOps2[Operations[L2][0]] = 1;
+				UsedOps2[Operations[L2][1]] = 1;
+
+			}
+
+			// Clear ready for putting 1's into.
+			for (int I = 0; I < NET_SIZE; I++)
+				UsedOps1[I] = 0;
+
+		}
+
+		// These are set at the beginning of a new parallel section.
+		UsedOps1[Operations[L1][0]] = 1;
+		UsedOps1[Operations[L1][1]] = 1;
+
+	}
+
+	// Rerun in case we might need to pull back operations further.
+	if (altered == true)
+		goto restart;
+
+} // End.
+
+// --------------------------------------------------------------------------
+
 int State::GetDepth(void) { // Returns the depth (i.e. The number of parallel steps required) of the
 							// sorting network.
 
@@ -327,6 +420,10 @@ double State::ScoreState(void) { // Returns the average score (in number of comp
 		// Do while there are no more UnSorted vectors left.
 		while (TempStatePtr->NumUnsorted > 0)
 			TempStatePtr->DoRandomTransition();   // Do a random transition.
+
+		//cout << "Before: " << TempStatePtr->GetDepth() << endl;
+		TempStatePtr->MinimiseDepth();
+		//cout << "After: " << TempStatePtr->GetDepth() << endl;
 
 		// Save the values we found.
 		Level[Test] = TempStatePtr->CurrentLevel;
