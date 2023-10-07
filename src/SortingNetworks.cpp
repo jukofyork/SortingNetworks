@@ -17,35 +17,38 @@
 // new5: Have added ability to use mean, mean ignoring outliers and median.
 
 // Settings found from old/nd_search14.cc:
-//   Using: NUM_TESTS=4 / BEAM_SIZE=100, it was possible to get 5 minimum
+//   Using: NUM_TESTS=4 / MAX_BEAM_SIZE=100, it was possible to get 5 minimum
 //          equalling nets for netsize 12 (ie. 39), 5 runs out of 5!
-//   Also: NUM_TESTS=6 / BEAM_SIZE=150, it was possible to get 3 minimum
+//   Also: NUM_TESTS=6 / MAX_BEAM_SIZE=150, it was possible to get 3 minimum
 //         equalling nets for netsize 13 (ie. 45), 3 runs out of 3!
-//   Also: NUM_TESTS=9 / BEAM_SIZE=225, it was possible to get 4 minimum
+//   Also: NUM_TESTS=9 / MAX_BEAM_SIZE=225, it was possible to get 4 minimum
 //         equalling nets for netsize 14 (ie. 51), 4 runs out of 4!
-//   Also: NUM_TESTS=14 / BEAM_SIZE=338, it was possible to get 1 minimum
+//   Also: NUM_TESTS=14 / MAX_BEAM_SIZE=338, it was possible to get 1 minimum
 //         equalling net for netsize 15 (ie. 56), 1 run out of 1!
 
 using namespace std;
 
 // Maximum number of iterations to run for.
-#define MAX_ITERS				1000000						// Ctrl-C will exit anyway.
+#define MAX_ITERS				1000000					// Ctrl-C will exit anyway.
 
 // Number of elements to sort.
-#define NET_SIZE				17
+#define NET_SIZE				16
 
 // Number of states in beam ( < 2^16 ?).
-#define BEAM_SIZE				( ((NET_SIZE*(NET_SIZE-1))/2) * ((NET_SIZE*(NET_SIZE-1))/2) ) //20000
+#define MAX_BEAM_SIZE			1000
 
 // Number of tests per score run ( < 10 ?).
-#define NUM_TEST_RUNS			5 //5
+#define NUM_TEST_RUNS			10 //12
 
 // The number of "elites" we take the average of to get the scores.
-#define NUM_TEST_RUN_ELITES		4 //5 //1						// Must be in the range [1,NUM_TEST_RUNS].
+#define NUM_TEST_RUN_ELITES		1 //10 						// Must be in the range [1,NUM_TEST_RUNS].
 
 // This weight we put on minimising the depth.
 // NOTE: If DEPTH_WEIGHT < 0.5 we assume we are optimizing the length, else optimizing the depth.
-#define DEPTH_WEIGHT			0.0001 //0.0001 //0.9999 // 0.0001 // 1.0 //0.0001
+#define DEPTH_WEIGHT			0.0001
+
+// Set this to use the asymmetry heuristic.
+#define USE_ASYMMETRY_HEURISTIC	true                  // Only works well for even N nets.
 
 // The target size of the network should be 1 less than best known.
 // URL: https://bertdobbelaere.github.io/sorting_networks.html
@@ -154,11 +157,13 @@ typedef struct Operation { // Stores a single operation (in one byte).
 // =============================================================================
 
 // The beam of states and temp copy to swap into.
-Operation Beam[BEAM_SIZE][MAX_OPS];
-Operation TempBeam[BEAM_SIZE][MAX_OPS];
+Operation Beam[MAX_BEAM_SIZE][MAX_OPS];
+int CurrentBeamSize;
+
+Operation TempBeam[MAX_BEAM_SIZE][MAX_OPS];
 
 // The successors found for all of the states in the beam.
-StateSuccessor BeamSucc[BEAM_SIZE * BRANCHING_FACTOR];
+StateSuccessor BeamSucc[MAX_BEAM_SIZE * BRANCHING_FACTOR];
 int NumBeamSucc;
 
 // =============================================================================
@@ -205,13 +210,14 @@ int main(void) {
 	// Init the lookup tables.
 	InitLookups();
 
-	cout << "NET_SIZE            = " << NET_SIZE << endl;
-	cout << "BEAM_SIZE           = " << BEAM_SIZE << endl;
-	cout << "NUM_TEST_RUNS       = " << NUM_TEST_RUNS << endl;
-	cout << "NUM_TEST_RUN_ELITES = " << NUM_TEST_RUN_ELITES << endl;
-	cout << "DEPTH_WEIGHT        = " << DEPTH_WEIGHT << endl;
-	cout << "LENGTH_UPPER_BOUND  = " << LENGTH_UPPER_BOUND << endl;
-	cout << "DEPTH_UPPER_BOUND   = " << DEPTH_UPPER_BOUND << endl;
+	cout << "NET_SIZE                = " << NET_SIZE << endl;
+	cout << "MAX_BEAM_SIZE           = " << MAX_BEAM_SIZE << endl;
+	cout << "NUM_TEST_RUNS           = " << NUM_TEST_RUNS << endl;
+	cout << "NUM_TEST_RUN_ELITES     = " << NUM_TEST_RUN_ELITES << endl;
+	cout << "USE_ASYMMETRY_HEURISTIC = " << (USE_ASYMMETRY_HEURISTIC==true?"Yes":"No") << endl;
+	cout << "DEPTH_WEIGHT            = " << DEPTH_WEIGHT << endl;
+	cout << "LENGTH_UPPER_BOUND      = " << LENGTH_UPPER_BOUND << endl;
+	cout << "DEPTH_UPPER_BOUND       = " << DEPTH_UPPER_BOUND << endl;
 	cout << endl;
 
 	int Iter;
