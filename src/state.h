@@ -47,7 +47,7 @@ public:
 	int NumUnsorted;                        // Number of unsorted vectors.
 
 	// This is used to store the operations used to get to this state.
-	byte Operations[MAX_OPS][2];            // Operations used so far.
+	BYTE Operations[MAX_OPS][2];            // Operations used so far.
 	int CurrentLevel;                       // How many ops done so far.
 
 	// ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -306,8 +306,8 @@ void State::MinimiseDepth(void) {
 					UsedOps1[Operations[L2][1]] = 1;
 
 					// Swap the operations.
-					byte TempOp1=Operations[L1][0];
-					byte TempOp2=Operations[L1][1];
+					BYTE TempOp1=Operations[L1][0];
+					BYTE TempOp2=Operations[L1][1];
 					Operations[L1][0]=Operations[L2][0];
 					Operations[L1][1]=Operations[L2][1];
 					Operations[L2][0]=TempOp1;

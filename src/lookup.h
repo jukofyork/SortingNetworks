@@ -22,7 +22,7 @@ using namespace std;
 bool IsSorted[NUM_TESTS];							// YES or NO.
 
 // For checking which ops are allowed for RandomTransition() function.
-byte AllowedOps[NUM_TESTS][BRANCHING_FACTOR][2];	// Source, Target.
+BYTE AllowedOps[NUM_TESTS][BRANCHING_FACTOR][2];	// Source, Target.
 int NumAllowedOps[NUM_TESTS];						// Number of allowed operations.
 
 // *****************************************************************************

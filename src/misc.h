@@ -32,17 +32,17 @@ using namespace std;
 // ***************************************************************************
 
 // To save on typeing the unsigned modifier.
-typedef unsigned char uchar;
-typedef unsigned short ushort;
-typedef unsigned int uint;
-typedef unsigned long ulong;
+typedef unsigned char UCHAR;
+typedef unsigned short USHORT;
+typedef unsigned int UINT;
+typedef unsigned long ULONG;
 
 // For standard data types based in bit size (Change for compiler!).
-typedef bool bit;             // Best to use C++ bool if possible.
-typedef unsigned char nibble;          // 4-bits (No 4-bit type in C/C++!)
-typedef unsigned char byte;            // 8-Bits.
-typedef unsigned short word;            // 16-Bits.
-typedef unsigned int dword;           // 32-Bits (Double word).
+typedef bool BIT;             // Best to use C++ bool if possible.
+typedef uint8_t NIBBLE;          // 4-bits (No 4-bit type in C/C++!)
+typedef uint8_t BYTE;            // 8-Bits.
+typedef uint16_t WORD;            // 16-Bits.
+typedef uint32_t DWORD;           // 32-Bits (Double word).
 
 // For Boolean use and testing in C++.
 #define FALSE           0               // Like C++ 'false'.

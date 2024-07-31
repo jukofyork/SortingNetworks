@@ -145,13 +145,13 @@ using namespace std;
 
 typedef struct StateSuccessor { // This is used for the beam search on the set of states.
 // It is then sorted by qsort.
-	word BeamIndex;         // Index in beam of states.
-	byte Op1, Op2;
+	WORD BeamIndex;         // Index in beam of states.
+	BYTE Op1, Op2;
 	double Score;             // (Heuristically) Predicted length of sorting net.
 } StateSuccessor; // End StateSuccessor structure.
 
-typedef struct Operation { // Stores a single operation (in one byte).
-	byte Op1, Op2;
+typedef struct Operation { // Stores a single operation (in one BYTE).
+	BYTE Op1, Op2;
 } Operation; // End Operation structure.
 
 // =============================================================================
