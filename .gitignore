@@ -1,2 +1,36 @@
-/Release/
-/Debug/
+# Build artifacts
+*.o
+*.obj
+sorting_networks
+
+# Build directories
+/build/
+/bin/
+/obj/
+
+# IDE files (legacy Eclipse)
+.cproject
+.project
+.settings/
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test output
+error.log
+test.sh
+test_comprehensive.sh

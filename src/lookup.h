@@ -1,96 +1,73 @@
 // lookup.h
 // ========
-// This file contains the various lookup tables used and the code to generate 
-// them all.
+// Modern C++20 lookup tables for sorting network search.
+// Now uses runtime-sized vectors.
 
 #pragma once
 
-#ifndef LOOKUP_H
-#define LOOKUP_H
+#include "config.h"
+#include <vector>
+#include <array>
 
-using namespace std;
+namespace sorting_networks {
 
-// ***************************************************************************
-// *                                  INCLUDES                               *
-// ***************************************************************************
+// ============================================================================
+// Lookup Tables
+// ============================================================================
 
-// *****************************************************************************
-// *                            GLOBAL LOOKUP TABLES                           *
-// *****************************************************************************
+class LookupTables {
+public:
+    void initialize() {
+        const int n = g_config.net_size;
+        const int tests = g_config.num_tests;
+        
+        // Resize vectors to runtime-computed sizes
+        is_sorted_.resize(tests);
+        allowed_ops_.resize(tests);
+        
+        // Create is_sorted lookup
+        for (int v = 0; v < tests; ++v) {
+            is_sorted_[v] = check_sorted(v, n);
+        }
+        
+        // Create allowed_ops lookup
+        for (int i = 0; i < tests; ++i) {
+            allowed_ops_[i].clear();
+            for (int n1 = 0; n1 < n - 1; ++n1) {
+                for (int n2 = n1 + 1; n2 < n; ++n2) {
+                    if (((i >> n1) & 1) == 0 && ((i >> n2) & 1) == 1) {
+                        allowed_ops_[i].push_back(std::array<byte, 2>{static_cast<byte>(n1), static_cast<byte>(n2)});
+                    }
+                }
+            }
+        }
+    }
+    
+    [[nodiscard]] bool is_sorted(int vector) const { return is_sorted_[vector]; }
+    
+    [[nodiscard]] const std::vector<std::array<byte, 2>>& allowed_ops(int vector) const {
+        return allowed_ops_[vector];
+    }
+    
+    [[nodiscard]] int num_allowed_ops(int vector) const {
+        return static_cast<int>(allowed_ops_[vector].size());
+    }
 
-// This is used so we can say instantly if a vector (in n-bit int) is sorted.
-bool IsSorted[NUM_TESTS];							// YES or NO.
+private:
+    std::vector<bool> is_sorted_;
+    std::vector<std::vector<std::array<byte, 2>>> allowed_ops_;
+    
+    [[nodiscard]] static bool check_sorted(int v, int n) {
+        for (int i = 0; i < n - 1; ++i) {
+            if (((v >> i) & 1) == 0 && ((v >> (i + 1)) & 1) == 1) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
 
-// For checking which ops are allowed for RandomTransition() function.
-BYTE AllowedOps[NUM_TESTS][BRANCHING_FACTOR][2];	// Source, Target.
-int NumAllowedOps[NUM_TESTS];						// Number of allowed operations.
+// Global instance
+inline LookupTables g_lookups;
 
-// *****************************************************************************
-// *                       LOOKUP TABLE GENERATION FUNCTIONS                   *
-// *****************************************************************************
-
-void CreateIsSorted(void) { // Sets up the IsSorted vector so we can test for if sorted in 1 operation
-							// rather than NetSize-1 in a loop.
-
-	int V, I;
-
-	// For all vectors.
-	for (V = 0; V < NUM_TESTS; V++) {
-
-		// Simply test for one out-of-order.
-		for (I = 0;; I++) {
-			if (I == (NET_SIZE - 1)) {
-				IsSorted[V] = true;					// Is Sorted.
-				break;
-			}
-			if (((V >> I) & 1) == 0 && ((V >> (I + 1)) & 1) == 1) { // REMEMBER: Highest First!
-				IsSorted[V] = false;				// Is NOT Sorted.
-				break;
-			}
-		}
-
-	}
-
-} // End CreateIsSorted.
-
-// -----------------------------------------------------------------------------
-
-void CreateAllowedOps(void) { // Creates tables used to check which ops are allowed for RandomTransition()
-							  // function.
-
-	int I, N1, N2;
-
-	// For each vector find the list.
-	for (I = 0; I < NUM_TESTS; I++) {
-
-		// Clear ready for adding to.
-		NumAllowedOps[I] = 0;
-
-		// Now find all operation allowed on the vector.
-		for (N1 = 0; N1 < NET_SIZE - 1; N1++) {
-			for (N2 = N1 + 1; N2 < NET_SIZE; N2++) {
-				if (((I >> N1) & 1) == 0 && ((I >> N2) & 1) == 1) {
-					AllowedOps[I][NumAllowedOps[I]][0] = N1; // Source.
-					AllowedOps[I][NumAllowedOps[I]][1] = N2; // Target.
-					NumAllowedOps[I]++;                    // One more allowed.
-				}
-			}
-		}
-
-	}
-
-} // End CreateAllowedOps.
-
-// -----------------------------------------------------------------------------
-
-void InitLookups(void) { // Creates the lookup tables needed by State class.
-
-	// Call the function to create the sorted vectors.
-	CreateIsSorted();
-
-	// Create the lists of allowed ops.
-	CreateAllowedOps();
-
-} // End InitLookups.
-
-#endif
+} // namespace sorting_networks

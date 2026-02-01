@@ -1,172 +1,186 @@
 // search.h
 // ========
-// This file contains the code used to do the beam search.
+// Modern C++20 beam search implementation.
+// Now uses runtime-sized vectors.
 
 #pragma once
 
-#ifndef SEARCH_H
-#define SEARCH_H
-
-using namespace std;
-
-// ***************************************************************************
-// *                                  INCLUDES                               *
-// ***************************************************************************
-
+#include "config.h"
+#include "state.h"
+#include <vector>
+#include <algorithm>
+#include <memory>
 #include <iostream>
-#include <stdlib.h>                    // For qsort() function.
 
-// *****************************************************************************
-// *                              BEAM SEARCH CODE                             *
-// *****************************************************************************
-
-int CompSucc(const void *E1, const void *E2) { // For qsort.
-	if (((StateSuccessor*) E1)->Score < ((StateSuccessor*) E2)->Score)
-		return -1;
-	if (((StateSuccessor*) E1)->Score > ((StateSuccessor*) E2)->Score)
-		return 1;
-	return 0;
-} // End CompSucc.
-
-// --------------------------------------------------------------------------
-
-int BeamSearch(State &Result) { // Finds a sorting network by slowly reducing the depth of the tree
-								// using a Non-Deterministic (Topological) Search.
-								// Returns the level found.
-
-	int I;
-
-	static State BeamState;                      // Used to make copy from beam.
-
-	int SuccOps[NET_SIZE][NET_SIZE];       // List of operations allowed.
-	int NumSuccs;                         // Number of successors.
-
-	// Start off with just a single top level beam.
-	CurrentBeamSize=1;
-
-	// Do until one is found.
-	for (int Level = 0;; Level++) {
-
-		if (CurrentBeamSize<MAX_BEAM_SIZE)
-			cout << Level << " [" << CurrentBeamSize << "] ";
-		else
-			cout << Level << " ";
-		cout.flush();
-
-		// For all states in the beam.
-		NumBeamSucc = 0;
-		for (I = 0; I < CurrentBeamSize; I++) {
-
-			// Make the state to use.
-			BeamState.SetStartState();
-			for (int J = 0; J < Level; J++)
-				BeamState.UpdateState(Beam[I][J].Op1, Beam[I][J].Op2);
-
-			// Find all the active successors for the whole set of vectors.
-			// Stop when no more successors to the moved-into state.
-			NumSuccs = BeamState.FindSuccessors(SuccOps);
-			if (NumSuccs == 0) {
-				cout << endl;
-				Result = BeamState;
-				return Result.CurrentLevel;
-			}
-
-			// If we can simply do the 'inverse' opperation to the last, then do it.
-			// ### THIS WAS ALLREADY DONE IN THE OLD CODE - IN LINUX!!!! ###
-			bool SkipSearch=false;
-			if (USE_ASYMMETRY_HEURISTIC == true && Level >= 1) {
-				int N1, N2;
-				N1 = Beam[I][Level - 1].Op1;
-				N2 = Beam[I][Level - 1].Op2;
-				if (N1 != (NET_SIZE - 1) - N1 && N1 != (NET_SIZE - 1) - N2
-					&& N2 != (NET_SIZE - 1) - N1 && N2 != (NET_SIZE - 1) - N2
-					&& SuccOps[(NET_SIZE - 1) - N2][(NET_SIZE - 1) - N1] == 1) {
-
-					State TempState = BeamState;              // Make a copy.
-					TempState.UpdateState((NET_SIZE - 1) - N2, (NET_SIZE - 1) - N1); // Update it.
-
-					// Update the succs.
-					BeamSucc[NumBeamSucc].BeamIndex = I;
-					BeamSucc[NumBeamSucc].Op1 = (NET_SIZE - 1) - N2;
-					BeamSucc[NumBeamSucc].Op2 = (NET_SIZE - 1) - N1;
-					BeamSucc[NumBeamSucc].Score = TempState.ScoreState();
-					NumBeamSucc++;
-					SkipSearch=true;
-				}
-			}
-
-	         // Just do normal then.
-			if (SkipSearch==false) {
-
-				// For each of the living successors get a score using ND search.
-				// URL: https://stackoverflow.com/questions/47758947/c-openmp-nested-loops-where-the-inner-iterator-depends-on-the-outer-one
-				//for (N1=0;N1<NET_SIZE-1;N1++) {
-				//	for (N2=N1+1;N2<NET_SIZE;N2++) {
-				#pragma omp parallel for
-				for (int k = 0; k < NET_SIZE * (NET_SIZE - 1) / 2; k++) {
-
-					// Get N1 and N2.
-					int N1, N2;
-					N1 = k / NET_SIZE;
-					N2 = k % NET_SIZE;
-					if (N2 <= N1) {
-						N1 = NET_SIZE - N1 - 2;
-						N2 = NET_SIZE - N2 - 1;
-					}
-
-					// If the operation is allowed, then find how well it does.
-					if (SuccOps[N1][N2] == 1) {
-
-						// Make a copy.
-						State *TempStatePtr = new State;
-						*TempStatePtr = BeamState;
-						TempStatePtr->UpdateState(N1, N2);     // Update it.
-
-						// Score it.
-						double score = TempStatePtr->ScoreState();
-
-						delete TempStatePtr;
-
-						// Update the successors.
-						#pragma omp critical
-						{
-							BeamSucc[NumBeamSucc].BeamIndex = I;
-							BeamSucc[NumBeamSucc].Op1 = N1;
-							BeamSucc[NumBeamSucc].Op2 = N2;
-							BeamSucc[NumBeamSucc].Score = score;
-							NumBeamSucc++;
-						}
-
-					}
-
-				}
-
-			}
-
-		}
-
-		// Sort the list of successors.
-		qsort(BeamSucc, NumBeamSucc, sizeof(StateSuccessor), CompSucc);
-
-		// Set the size of the new beam.
-		CurrentBeamSize=min(NumBeamSucc,(int)MAX_BEAM_SIZE);
-
-		// Create the new set of states.
-		for (I = 0; I < CurrentBeamSize; I++) {
-			for (int J = 0; J < Level; J++) {
-				TempBeam[I][J] = Beam[BeamSucc[I].BeamIndex][J];
-			}
-			TempBeam[I][Level].Op1 = BeamSucc[I].Op1;
-			TempBeam[I][Level].Op2 = BeamSucc[I].Op2;
-		}
-		for (I = 0; I < CurrentBeamSize; I++) {
-			for (int J = 0; J < (Level + 1); J++) {
-				Beam[I][J] = TempBeam[I][J];
-			}
-		}
-
-	}
-
-} // End.
-
+#ifdef _OPENMP
+#include <omp.h>
 #endif
+
+namespace sorting_networks {
+
+// ============================================================================
+// Data Structures
+// ============================================================================
+
+struct Operation {
+    byte op1 = 0;
+    byte op2 = 0;
+};
+
+struct StateSuccessor {
+    word beam_index = 0;
+    byte op1 = 0;
+    byte op2 = 0;
+    double score = 0.0;
+};
+
+// ============================================================================
+// Beam Storage - now dynamically sized
+// ============================================================================
+
+class BeamSearchContext {
+public:
+    std::vector<std::vector<Operation>> beam;
+    std::vector<std::vector<Operation>> temp_beam;
+    std::vector<StateSuccessor> beam_successors;
+    int current_beam_size = 1;
+    
+    BeamSearchContext() {
+        resize();
+    }
+    
+    void resize() {
+        const int max_beam = g_config.max_beam_size;
+        const int max_ops = g_config.max_ops;
+        const int branching = g_config.branching_factor;
+        
+        // Use assign to reinitialize all elements, not just add new ones
+        beam.assign(max_beam, std::vector<Operation>(max_ops));
+        temp_beam.assign(max_beam, std::vector<Operation>(max_ops));
+        beam_successors.reserve(max_beam * branching);
+    }
+    
+    [[nodiscard]] int beam_search(State& result);
+};
+
+// Global instance
+inline BeamSearchContext g_beam_context;
+
+// ============================================================================
+// Beam Search Implementation
+// ============================================================================
+
+inline int BeamSearchContext::beam_search(State& result) {
+    const int net_size = g_config.net_size;
+    const int max_beam_size = g_config.max_beam_size;
+    const int max_ops = g_config.max_ops;
+    const bool use_asymmetry = g_config.use_asymmetry_heuristic;
+    
+    // Ensure beam storage is sized correctly
+    if (static_cast<int>(beam.size()) != max_beam_size || 
+        (beam.size() > 0 && static_cast<int>(beam[0].size()) != max_ops)) {
+        resize();
+    }
+    
+    current_beam_size = 1;
+    State beam_state;
+    
+    for (int level = 0; ; ++level) {
+        if (current_beam_size < max_beam_size)
+            std::cout << level << " [" << current_beam_size << "] ";
+        else
+            std::cout << level << " ";
+        std::cout.flush();
+        
+        beam_successors.clear();
+        
+        for (int i = 0; i < current_beam_size; ++i) {
+            beam_state.set_start_state();
+            for (int j = 0; j < level; ++j) {
+                beam_state.update_state(beam[i][j].op1, beam[i][j].op2);
+            }
+            
+            // Dynamic 2D vector for successor operations
+            std::vector<std::vector<int>> succ_ops(net_size, std::vector<int>(net_size, 0));
+            int num_succs = beam_state.find_successors(succ_ops);
+            
+            if (num_succs == 0) {
+                std::cout << std::endl;
+                result = beam_state;
+                return result.current_level;
+            }
+            
+            bool skip_search = false;
+            if (use_asymmetry && level >= 1) {
+                int n1 = beam[i][level - 1].op1;
+                int n2 = beam[i][level - 1].op2;
+                int inv_n1 = (net_size - 1) - n2;
+                int inv_n2 = (net_size - 1) - n1;
+                
+                if (n1 != (net_size - 1) - n1 && n1 != (net_size - 1) - n2 &&
+                    n2 != (net_size - 1) - n1 && n2 != (net_size - 1) - n2 &&
+                    succ_ops[inv_n1][inv_n2] == 1) {
+                    
+                    State temp_state = beam_state;
+                    temp_state.update_state(inv_n1, inv_n2);
+                    
+                    StateSuccessor succ;
+                    succ.beam_index = static_cast<word>(i);
+                    succ.op1 = static_cast<byte>(inv_n1);
+                    succ.op2 = static_cast<byte>(inv_n2);
+                    succ.score = temp_state.score_state();
+                    beam_successors.push_back(succ);
+                    skip_search = true;
+                }
+            }
+            
+            if (!skip_search) {
+                #pragma omp parallel for
+                for (int k = 0; k < net_size * (net_size - 1) / 2; ++k) {
+                    int n1 = k / net_size;
+                    int n2 = k % net_size;
+                    if (n2 <= n1) {
+                        n1 = net_size - n1 - 2;
+                        n2 = net_size - n2 - 1;
+                    }
+                    
+                    if (succ_ops[n1][n2] == 1) {
+                        auto temp_state = std::make_unique<State>(beam_state);
+                        temp_state->update_state(n1, n2);
+                        double score = temp_state->score_state();
+                        
+                        #pragma omp critical
+                        {
+                            StateSuccessor succ;
+                            succ.beam_index = static_cast<word>(i);
+                            succ.op1 = static_cast<byte>(n1);
+                            succ.op2 = static_cast<byte>(n2);
+                            succ.score = score;
+                            beam_successors.push_back(succ);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Sort using std::sort
+        std::sort(beam_successors.begin(), beam_successors.end(),
+                  [](const auto& a, const auto& b) { return a.score < b.score; });
+        
+        current_beam_size = std::min(static_cast<int>(beam_successors.size()), max_beam_size);
+        
+        // Update beams
+        for (int i = 0; i < current_beam_size; ++i) {
+            for (int j = 0; j < level; ++j)
+                temp_beam[i][j] = beam[beam_successors[i].beam_index][j];
+            temp_beam[i][level].op1 = beam_successors[i].op1;
+            temp_beam[i][level].op2 = beam_successors[i].op2;
+        }
+        
+        for (int i = 0; i < current_beam_size; ++i)
+            for (int j = 0; j <= level; ++j)
+                beam[i][j] = temp_beam[i][j];
+    }
+}
+
+} // namespace sorting_networks
