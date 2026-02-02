@@ -1,27 +1,8 @@
-// config.h
-// ========
-// Runtime configuration for sorting network search.
-// Modern C++20 version - supports command-line configuration.
-
 #pragma once
 
 #include <cstdint>
-#include <algorithm>
 #include <stdexcept>
 #include <string>
-
-namespace sorting_networks {
-
-// ============================================================================
-// Type Aliases
-// ============================================================================
-
-using byte = std::uint8_t;
-using word = std::uint16_t;
-
-// ============================================================================
-// Bounds Lookup
-// ============================================================================
 
 struct Bounds {
     int length;
@@ -66,44 +47,50 @@ constexpr Bounds get_bounds(int n) {
     }
 }
 
-// ============================================================================
-// Runtime Configuration
-// ============================================================================
-
 class Config {
 public:
-    // Network parameters
-    int net_size = 16;
-    int max_beam_size = 1000;
-    int num_test_runs = 10;
-    int num_test_run_elites = 1;
-    double depth_weight = 0.0001;
-    bool use_asymmetry_heuristic = true;
-    int max_iterations = 1'000'000;
-    bool asymmetry_explicitly_set = false;  // Track if user overrode default
-    
-    // Computed values
-    int branching_factor = 0;
-    int num_tests = 0;
-    int length_upper_bound = 0;
-    int depth_upper_bound = 0;
-    int max_ops = 0;
-    
-    // Initialize computed values based on net_size
-    // Also sets default asymmetry heuristic: on for even, off for odd
+    Config() = default;
+
     void initialize();
-    
-    // Parse command line arguments
     void parse_args(int argc, char* argv[]);
-    
-    // Print usage information
-    static void print_usage(const char* program_name);
-    
-    // Print current configuration
+    void print_usage(const char* program_name) const;
     void print() const;
+
+    // Getters for user-configurable parameters
+    [[nodiscard]] int get_max_iterations() const { return max_iterations_; }
+    [[nodiscard]] int get_net_size() const { return net_size_; }
+    [[nodiscard]] int get_max_beam_size() const { return max_beam_size_; }
+    [[nodiscard]] int get_num_scoring_iterations() const { return num_scoring_iterations_; }
+    [[nodiscard]] int get_num_elites() const { return num_elites_; }
+    [[nodiscard]] bool get_use_symmetry_heuristic() const { return use_symmetry_heuristic_; }
+    [[nodiscard]] bool use_zobrist() const { return use_zobrist_; }
+    [[nodiscard]] double get_depth_weight() const { return depth_weight_; }
+
+    // Getters for computed parameters
+    [[nodiscard]] std::size_t get_num_input_patterns() const { return num_input_patterns_; }
+    [[nodiscard]] const char* get_input_pattern_type() const { return input_pattern_type_; }
+    [[nodiscard]] int get_length_lower_bound() const { return length_lower_bound_; }
+    [[nodiscard]] int get_length_upper_bound() const { return length_upper_bound_; }
+    [[nodiscard]] int get_depth_lower_bound() const { return depth_lower_bound_; }
+    [[nodiscard]] int get_branching_factor() const { return branching_factor_; }
+
+private:
+    // User-configurable parameters (with defaults)
+    int max_iterations_ = 1;
+    int net_size_ = 8;
+    int max_beam_size_ = 100;
+    int num_scoring_iterations_ = 5;
+    int num_elites_ = 1;
+    bool use_symmetry_heuristic_ = true;
+    bool symmetry_explicitly_set_ = false;
+    bool use_zobrist_ = false;
+    double depth_weight_ = 0.0001;
+
+    // Computed parameters
+    std::size_t num_input_patterns_ = 0;
+    const char* input_pattern_type_ = "uint8_t";
+    int length_lower_bound_ = 0;
+    int length_upper_bound_ = 0;
+    int depth_lower_bound_ = 0;
+    int branching_factor_ = 0;
 };
-
-// Global config instance
-inline Config g_config;
-
-} // namespace sorting_networks

@@ -1,98 +1,93 @@
-// state.h
-// =======
-// Modern C++20 state management for sorting network beam search.
-// Now uses runtime-sized vectors.
-
 #pragma once
 
 #include "config.h"
 #include "lookup.h"
+#include "types.h"
 #include <vector>
-#include <array>
 #include <memory>
 #include <algorithm>
 #include <iostream>
 #include <random>
 #include <thread>
-#include <ctime>
 #include <cstdint>
 
-namespace sorting_networks {
-
-// ============================================================================
-// List Element Structure
-// ============================================================================
-
-struct ListElement {
-    unsigned in_list : 1;    // 1=Yes, 0=No
-    unsigned vector : 31;    // Vector (& Vector index) held
-    int next;                // Index to next in list (-1 == End)
-};
-
-// ============================================================================
-// State Class
-// ============================================================================
-
+// State represents the current progress of sorting network construction.
+// It tracks which input patterns have been sorted and which operations have been applied.
+template<int NetSize, bool EnableHashing = false>
 class State {
 public:
-    // Data members - now dynamically sized
+    using PatternType = typename BitStorage<NetSize>::type;
+
+    // ListElement represents a node in the intrusive linked list of unsorted patterns.
+    // This is a space-efficient way to track which input patterns still need sorting.
+    struct ListElement {
+        std::uint8_t in_list;      // 1 if this pattern is currently in the unsorted list
+        PatternType bit_pattern;   // The binary pattern value
+        int next;                  // Index of next element in linked list, -1 if end
+    };
+
+    // Linked list tracking unsorted input patterns.
+    // Uses intrusive linked list stored in used_list for O(1) removal/insertion.
     std::vector<ListElement> used_list;
-    int first_used = -1;
-    int num_unsorted = 0;
-    
-    std::vector<std::array<byte, 2>> operations;
-    int current_level = 0;
+    int first_used = -1;       // Index of first unsorted pattern in linked list
+    int num_unsorted = 0;      // Number of patterns still needing to be sorted
 
-    // Constructor - initializes vectors to correct sizes
-    State() {
-        const int tests = g_config.num_tests;
-        const int ops = g_config.max_ops;
-        used_list.resize(tests);
-        operations.resize(ops);
-    }
-    
-    // Copy constructor
-    State(const State& other) 
-        : used_list(other.used_list),
-          first_used(other.first_used),
-          num_unsorted(other.num_unsorted),
-          operations(other.operations),
-          current_level(other.current_level) {}
-    
-    // Copy assignment
-    State& operator=(const State& other) {
-        if (this != &other) {
-            used_list = other.used_list;
-            first_used = other.first_used;
-            num_unsorted = other.num_unsorted;
-            operations = other.operations;
-            current_level = other.current_level;
-        }
-        return *this;
-    }
+    // Sequence of compare-exchange operations applied so far.
+    std::vector<Operation> operations;
+    int current_level = 0;     // Current number of operations in the sequence
 
-    // Core methods
-    void set_start_state();
-    void update_state(int op1, int op2);
-    void do_random_transition();
+    // Zobrist hash for efficient state comparison and deduplication.
+    // Updated incrementally as patterns are sorted or transformed.
+    // Only used when EnableHashing template parameter is true.
+    std::uint64_t zobrist_hash = 0;
+
+    explicit State(const Config& config);
+    State(const State& other) = default;
+    State& operator=(const State& other) = default;
+
+    // Reset state to initial condition with all non-trivial unsorted patterns.
+    // Trivial patterns (all 0s, single 1, etc.) are already sorted by definition.
+    void set_start_state(const Config& config, const LookupTables& lookups);
+
+    // Apply a compare-exchange operation to all unsorted patterns.
+    // This updates the linked list by moving patterns to their new values
+    // or removing them if they become sorted.
+    void update_state(int op1, int op2, const LookupTables& lookups);
+
+    // Select a random unsorted pattern and apply a random valid operation to it.
+    // By picking a random unsorted pattern first, we weight operations by how many
+    // patterns they can affect. Operations valid for many patterns are more likely chosen.
+    void do_random_transition(const LookupTables& lookups);
+
     void print_state() const;
-    void minimise_depth();
-    [[nodiscard]] int get_depth() const;
-    [[nodiscard]] double score_state();
-    [[nodiscard]] int find_successors(std::vector<std::vector<int>>& succ_ops);
-    
+
+    // Greedy algorithm to minimize parallel depth by reordering operations.
+    // Attempts to maximize parallelism while preserving correctness.
+    void minimise_depth(int net_size);
+
+    // Calculate the parallel depth (number of parallel layers) of the network.
+    // Two operations can be in the same layer if they use disjoint sets of wires.
+    [[nodiscard]] int get_depth(int net_size) const;
+
+    // Score this state using Monte Carlo simulation.
+    // Runs multiple random completions and returns average of elite samples.
+    [[nodiscard]] double score_state(const Config& config, const LookupTables& lookups);
+
+    // Find all valid successor operations from current state.
+    // An operation is valid if it would change at least one unsorted pattern.
+    [[nodiscard]] int find_successors(std::vector<std::vector<int>>& succ_ops, int net_size);
+
 private:
-    // Thread-local random number generator
+    // Thread-local random number generator for parallel execution.
     static std::mt19937& get_thread_rng() {
         thread_local std::mt19937 rng([]() {
+            std::random_device rd;
             auto tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
-            auto time_seed = static_cast<std::uint32_t>(std::time(nullptr));
-            return tid + time_seed;
+            return static_cast<unsigned>(rd() + tid);
         }());
         return rng;
     }
-    
-    // Generate random integer in [0, n]
+
     static int rand_int(int n) {
         if (n <= 0) return 0;
         std::uniform_int_distribution<int> dist(0, n);
@@ -100,232 +95,276 @@ private:
     }
 };
 
-// ============================================================================
-// Implementation
-// ============================================================================
+template<int NetSize, bool EnableHashing>
+State<NetSize, EnableHashing>::State(const Config& config) {
+    used_list.resize(config.get_num_input_patterns());
+    operations.resize(config.get_length_upper_bound());
+}
 
-inline void State::set_start_state() {
+// Initialize the state with all non-trivial unsorted patterns.
+// Patterns with 0 or 1 ones are trivially sorted, so we start with patterns
+// that have at least 2 ones (indicating potential unsortedness).
+template<int NetSize, bool EnableHashing>
+void State<NetSize, EnableHashing>::set_start_state(const Config& config, const LookupTables& lookups) {
     first_used = -1;
-    const int tests = g_config.num_tests;
-    const int n = g_config.net_size;
-    
-    for (int i = 0; i < tests; ++i) {
-        if (g_lookups.is_sorted(i)) {
+    zobrist_hash = 0;
+
+    for (std::size_t i = 0; i < config.get_num_input_patterns(); ++i) {
+        if (lookups.is_sorted(i)) {
             used_list[i].in_list = 0;
         } else {
             used_list[i].in_list = 1;
             used_list[i].next = first_used;
-            used_list[i].vector = i;
+            used_list[i].bit_pattern = static_cast<PatternType>(i);
             first_used = i;
+            // XOR in the Zobrist value for this unsorted pattern (only if enabled at compile time)
+            if constexpr (EnableHashing) {
+                zobrist_hash ^= lookups.zobrist_hash(static_cast<int>(i));
+            }
         }
     }
-    
-    num_unsorted = tests - (n + 1);
+
+    // Subtract (n+1) for the n+1 trivial sorted patterns (0 ones, 1 one, ..., n ones but sorted)
+    num_unsorted = config.get_num_input_patterns() - (config.get_net_size() + 1);
     current_level = 0;
 }
 
-inline void State::update_state(int op1, int op2) {
+// Apply a compare-exchange operation between wires op1 and op2.
+// For each unsorted pattern, if it has 0 at op1 and 1 at op2, we swap them.
+// This is done by updating the bit pattern and managing the linked list.
+// Also updates the Zobrist hash incrementally to track state changes (if enabled at compile time).
+template<int NetSize, bool EnableHashing>
+void State<NetSize, EnableHashing>::update_state(int op1, int op2, const LookupTables& lookups) {
     int last_index = -1;
-    
+
     for (int used_index = first_used; used_index != -1; ) {
         int next_index = used_list[used_index].next;
-        int vector = used_list[used_index].vector;
-        
-        if (((vector >> op1) & 1) == 0 && ((vector >> op2) & 1) == 1) {
-            used_list[vector].in_list = 0;
-            vector |= (1 << op1);
-            vector &= (~(1 << op2));
-            
-            if (used_list[vector].in_list == 1 || g_lookups.is_sorted(vector)) {
+        PatternType pattern = used_list[used_index].bit_pattern;
+
+        // Check if this pattern would be affected by the comparator (op1, op2)
+        if (((pattern >> op1) & 1) == 0 && ((pattern >> op2) & 1) == 1) {
+            // Remove old pattern from tracking
+            used_list[static_cast<std::size_t>(pattern)].in_list = 0;
+            // XOR out the old pattern's Zobrist value (only if enabled at compile time)
+            if constexpr (EnableHashing) {
+                zobrist_hash ^= lookups.zobrist_hash(static_cast<int>(pattern));
+            }
+
+            // Apply the comparator: set bit at op1, clear bit at op2
+            pattern |= (static_cast<PatternType>(1) << op1);
+            pattern &= (~(static_cast<PatternType>(1) << op2));
+
+            // Check if the new pattern is now sorted
+            if (used_list[static_cast<std::size_t>(pattern)].in_list == 1 || lookups.is_sorted(static_cast<int>(pattern))) {
                 num_unsorted--;
                 if (last_index != -1)
                     used_list[last_index].next = next_index;
                 else
                     first_used = next_index;
+                // New pattern is sorted, so it leaves the set - nothing to XOR in
             } else {
-                used_list[vector].in_list = 1;
-                used_list[used_index].vector = vector;
+                // New pattern needs further sorting, keep in list
+                used_list[static_cast<std::size_t>(pattern)].in_list = 1;
+                used_list[used_index].bit_pattern = pattern;
                 if (last_index != -1)
                     used_list[last_index].next = used_index;
                 else
                     first_used = used_index;
                 last_index = used_index;
+                // XOR in the new pattern's Zobrist value (if enabled at compile time)
+                if constexpr (EnableHashing) {
+                    zobrist_hash ^= lookups.zobrist_hash(static_cast<int>(pattern));
+                }
             }
         } else {
             last_index = used_index;
         }
-        
+
         used_index = next_index;
     }
-    
-    operations[current_level][0] = static_cast<byte>(op1);
-    operations[current_level][1] = static_cast<byte>(op2);
+
+    operations[current_level].op1 = static_cast<std::uint8_t>(op1);
+    operations[current_level].op2 = static_cast<std::uint8_t>(op2);
     current_level++;
-    
-    if (current_level > g_config.max_ops) {
-        std::cout << "Error: max_ops exceeded" << std::endl;
-        std::exit(1);
-    }
 }
 
-inline void State::do_random_transition() {
-    int rand_index = State::rand_int(num_unsorted - 1);
+// Select a random unsorted pattern and apply a random valid operation.
+// By picking a random unsorted pattern first, we weight operations by how many
+// patterns they can affect. Operations valid for many patterns are more likely chosen.
+template<int NetSize, bool EnableHashing>
+void State<NetSize, EnableHashing>::do_random_transition(const LookupTables& lookups) {
+    int rand_index = rand_int(num_unsorted - 1);
     int true_index = 0;
     int n = 0;
-    
+
     for (int i = first_used; i != -1; i = used_list[i].next) {
         if (n == rand_index) {
-            true_index = used_list[i].vector;
+            true_index = static_cast<int>(used_list[i].bit_pattern);
             break;
         }
         n++;
     }
-    
-    const auto& allowed = g_lookups.allowed_ops(true_index);
-    int rand_op = State::rand_int(static_cast<int>(allowed.size()) - 1);
-    update_state(allowed[rand_op][0], allowed[rand_op][1]);
+
+    const auto& allowed = lookups.allowed_ops(true_index);
+    int rand_op = rand_int(static_cast<int>(allowed.size()) - 1);
+    update_state(allowed[rand_op].op1, allowed[rand_op].op2, lookups);
 }
 
-inline void State::print_state() const {
-    const int tests = g_config.num_tests;
-    for (int i = 0; i < tests; ++i) {
-        std::cout << i << ':' << used_list[i].in_list << std::endl;
+template<int NetSize, bool EnableHashing>
+void State<NetSize, EnableHashing>::print_state() const {
+    for (const auto& elem : used_list) {
+        std::cout << elem.bit_pattern << ':' << static_cast<int>(elem.in_list) << std::endl;
     }
-    for (int i = 0; i < tests; ++i) {
-        std::cout << i << ':' << used_list[i].vector << " =>" << used_list[i].next << std::endl;
-    }
-    std::cout << first_used << std::endl;
-    std::cout << "Number Unsorted:" << num_unsorted << std::endl << std::endl;
+    std::cout << "First used: " << first_used << std::endl;
+    std::cout << "Unsorted: " << num_unsorted << std::endl;
 }
 
-inline void State::minimise_depth() {
-    const int net_size = g_config.net_size;
+// Greedy depth minimization by reordering independent operations.
+// Two operations are independent (can be parallel) if they use different wires.
+// This algorithm greedily moves operations earlier when possible to reduce depth.
+template<int NetSize, bool EnableHashing>
+void State<NetSize, EnableHashing>::minimise_depth(int net_size) {
     bool altered;
-    
+
     do {
         altered = false;
         std::vector<int> used_ops1(net_size, 0);
         std::vector<int> used_ops2(net_size, 0);
-        
+
         for (int l1 = 0; l1 < current_level; ++l1) {
-            if (used_ops1[operations[l1][0]] == 1 || used_ops1[operations[l1][1]] == 1) {
+            if (used_ops1[operations[l1].op1] == 1 || used_ops1[operations[l1].op2] == 1) {
                 std::fill(used_ops2.begin(), used_ops2.end(), 0);
-                
+
                 for (int l2 = l1; l2 < current_level; ++l2) {
-                    if (used_ops2[operations[l2][0]] == 1 || used_ops2[operations[l2][1]] == 1)
+                    if (used_ops2[operations[l2].op1] == 1 || used_ops2[operations[l2].op2] == 1)
                         break;
-                    
-                    if (used_ops1[operations[l2][0]] != 1 && used_ops1[operations[l2][1]] != 1) {
-                        used_ops1[operations[l2][0]] = 1;
-                        used_ops1[operations[l2][1]] = 1;
-                        
+
+                    if (used_ops1[operations[l2].op1] != 1 && used_ops1[operations[l2].op2] != 1) {
+                        used_ops1[operations[l2].op1] = 1;
+                        used_ops1[operations[l2].op2] = 1;
+
                         std::swap(operations[l1], operations[l2]);
-                        
+
                         l2 = l1;
                         l1++;
                         std::fill(used_ops2.begin(), used_ops2.end(), 0);
                         altered = true;
                         continue;
                     }
-                    
-                    used_ops2[operations[l2][0]] = 1;
-                    used_ops2[operations[l2][1]] = 1;
+
+                    used_ops2[operations[l2].op1] = 1;
+                    used_ops2[operations[l2].op2] = 1;
                 }
-                
+
                 std::fill(used_ops1.begin(), used_ops1.end(), 0);
             }
-            
-            used_ops1[operations[l1][0]] = 1;
-            used_ops1[operations[l1][1]] = 1;
+
+            used_ops1[operations[l1].op1] = 1;
+            used_ops1[operations[l1].op2] = 1;
         }
     } while (altered);
 }
 
-inline int State::get_depth() const {
-    const int net_size = g_config.net_size;
+// Calculate parallel depth by counting how many layers are needed.
+// A new layer starts when an operation shares a wire with a previous operation
+// in the current layer.
+template<int NetSize, bool EnableHashing>
+int State<NetSize, EnableHashing>::get_depth(int net_size) const {
     std::vector<int> used_ops(net_size, 0);
     int num_used = 1;
-    
+
     for (int i = 0; i < current_level; ++i) {
-        if (used_ops[operations[i][0]] == 1 || used_ops[operations[i][1]] == 1) {
+        if (used_ops[operations[i].op1] == 1 || used_ops[operations[i].op2] == 1) {
             std::fill(used_ops.begin(), used_ops.end(), 0);
             num_used++;
         }
-        
-        used_ops[operations[i][0]] = 1;
-        used_ops[operations[i][1]] = 1;
+
+        used_ops[operations[i].op1] = 1;
+        used_ops[operations[i].op2] = 1;
     }
-    
+
     return num_used;
 }
 
-inline double State::score_state() {
-    const int num_test_runs = g_config.num_test_runs;
-    const int num_test_run_elites = g_config.num_test_run_elites;
-    const double depth_weight = g_config.depth_weight;
-    
-    std::vector<int> levels(num_test_runs);
-    std::vector<int> depths(num_test_runs);
-    
-    for (int test = 0; test < num_test_runs; ++test) {
-        auto temp_state = std::make_unique<State>(*this);
-        
-        while (temp_state->num_unsorted > 0) {
-            temp_state->do_random_transition();
+// Score a state using Monte Carlo simulation.
+// Runs multiple random completions from this state and returns the average
+// of the best few (elite) results. Lower scores are better.
+template<int NetSize, bool EnableHashing>
+double State<NetSize, EnableHashing>::score_state(const Config& config, const LookupTables& lookups) {
+    std::vector<int> levels;
+    std::vector<int> depths;
+    levels.reserve(config.get_num_scoring_iterations());
+    depths.reserve(config.get_num_scoring_iterations());
+
+    State<NetSize, EnableHashing> temp_state(config);
+
+    for (int test = 0; test < config.get_num_scoring_iterations(); ++test) {
+        temp_state = *this;
+
+        // Complete the network with random operations
+        while (temp_state.num_unsorted > 0) {
+            temp_state.do_random_transition(lookups);
         }
-        
-        temp_state->minimise_depth();
-        
-        levels[test] = temp_state->current_level;
-        depths[test] = temp_state->get_depth();
+
+        temp_state.minimise_depth(config.get_net_size());
+
+        levels.push_back(temp_state.current_level);
+        depths.push_back(temp_state.get_depth(config.get_net_size()));
     }
-    
-    // Sort using std::sort
+
+    // Pair and sort by the configured priority (length or depth)
     std::vector<std::pair<int, int>> results;
-    results.reserve(num_test_runs);
-    for (int i = 0; i < num_test_runs; ++i) {
+    results.reserve(config.get_num_scoring_iterations());
+    for (int i = 0; i < config.get_num_scoring_iterations(); ++i) {
         results.emplace_back(levels[i], depths[i]);
     }
-    
-    std::sort(results.begin(), results.end(), [depth_weight](const auto& a, const auto& b) {
-        if (depth_weight < 0.5) {
+
+    std::sort(results.begin(), results.end(), [&config](const auto& a, const auto& b) {
+        if (config.get_depth_weight() < 0.5) {
             return a.first < b.first || (a.first == b.first && a.second < b.second);
         } else {
             return a.second < b.second || (a.second == b.second && a.first < b.first);
         }
     });
-    
+
+    // Average the elite (best) samples
     double length_sum = 0;
     double depth_sum = 0;
-    for (int test = 0; test < num_test_run_elites; ++test) {
+    for (int test = 0; test < config.get_num_elites(); ++test) {
         length_sum += results[test].first;
         depth_sum += results[test].second;
     }
-    
-    double mean_length = length_sum / num_test_run_elites;
-    double mean_depth = depth_sum / num_test_run_elites;
-    
-    return ((1.0 - depth_weight) * mean_length) + (depth_weight * mean_depth);
+
+    double mean_length = length_sum / config.get_num_elites();
+    double mean_depth = depth_sum / config.get_num_elites();
+
+    return ((1.0 - config.get_depth_weight()) * mean_length) + (config.get_depth_weight() * mean_depth);
 }
 
-inline int State::find_successors(std::vector<std::vector<int>>& succ_ops) {
-    const int net_size = g_config.net_size;
+// Find all valid successor operations from the current state.
+// An operation is valid if it would change at least one unsorted pattern.
+// Returns the number of valid successors found.
+template<int NetSize, bool EnableHashing>
+int State<NetSize, EnableHashing>::find_successors(std::vector<std::vector<int>>& succ_ops, int net_size) {
     int allowed = 0;
-    
+
     for (auto& row : succ_ops) {
         std::fill(row.begin(), row.end(), 0);
     }
-    
+
+    // Check all unsorted patterns to see which operations would affect them
     for (int i = first_used; i != -1; i = used_list[i].next) {
+        PatternType pattern = used_list[i].bit_pattern;
         for (int n1 = 0; n1 < net_size - 1; ++n1) {
             for (int n2 = n1 + 1; n2 < net_size; ++n2) {
-                if (((used_list[i].vector >> n1) & 1) == 0 && ((used_list[i].vector >> n2) & 1) == 1) {
+                if (((pattern >> n1) & 1) == 0 && ((pattern >> n2) & 1) == 1) {
                     succ_ops[n1][n2] = 1;
                 }
             }
         }
     }
-    
+
+    // Count total valid operations
     for (int n1 = 0; n1 < net_size - 1; ++n1) {
         for (int n2 = n1 + 1; n2 < net_size; ++n2) {
             if (succ_ops[n1][n2] == 1) {
@@ -333,8 +372,6 @@ inline int State::find_successors(std::vector<std::vector<int>>& succ_ops) {
             }
         }
     }
-    
+
     return allowed;
 }
-
-} // namespace sorting_networks

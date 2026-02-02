@@ -1,6 +1,3 @@
-# SortingNetworks Makefile
-# C++20, GCC, OpenMP
-
 CXX := g++
 CXXFLAGS := -std=c++20 -O3 -march=native -Wall -Wextra -Wpedantic -fopenmp
 LDFLAGS := -fopenmp
@@ -10,7 +7,7 @@ SRCDIR := src
 SOURCES := $(wildcard $(SRCDIR)/*.cpp)
 OBJECTS := $(SOURCES:.cpp=.o)
 
-.PHONY: all clean release debug
+.PHONY: all clean release debug profile run
 
 all: release
 
@@ -19,6 +16,9 @@ release: $(TARGET)
 
 debug: CXXFLAGS := -std=c++20 -g -O0 -Wall -Wextra -Wpedantic -fopenmp
 debug: $(TARGET)
+
+profile: CXXFLAGS += -DENABLE_PROFILING
+profile: $(TARGET)
 
 $(TARGET): $(OBJECTS)
 	$(CXX) $(OBJECTS) -o $@ $(LDFLAGS)
