@@ -63,7 +63,6 @@ public:
     [[nodiscard]] int get_num_scoring_iterations() const { return num_scoring_iterations_; }
     [[nodiscard]] int get_num_elites() const { return num_elites_; }
     [[nodiscard]] bool get_use_symmetry_heuristic() const { return use_symmetry_heuristic_; }
-    [[nodiscard]] bool use_zobrist() const { return use_zobrist_; }
     [[nodiscard]] double get_depth_weight() const { return depth_weight_; }
 
     // Getters for computed parameters
@@ -83,7 +82,6 @@ private:
     int num_elites_ = 1;
     bool use_symmetry_heuristic_ = true;
     bool symmetry_explicitly_set_ = false;
-    bool use_zobrist_ = false;
     double depth_weight_ = 0.0001;
 
     // Computed parameters

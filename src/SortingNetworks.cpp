@@ -2,6 +2,7 @@
 #include "lookup.h"
 #include "state.h"
 #include "search.h"
+#include "normalization.h"
 
 #include <iostream>
 #include <chrono>
@@ -20,10 +21,19 @@ void signal_handler(int) {
 }
 
 template<int NetSize>
-void print_results(const State<NetSize>& state, int length, int depth) {
+void print_results(const State<NetSize>& state, int length, int depth, int net_size) {
+    // Make a copy and canonicalize the operations
+    std::vector<Operation> normalized_ops;
+    normalized_ops.reserve(state.current_level);
     for (int i = 0; i < state.current_level; ++i) {
-        std::cout << '+' << (i + 1) << ":(" << static_cast<int>(state.operations[i].op1) << ','
-                  << static_cast<int>(state.operations[i].op2) << ")" << std::endl;
+        normalized_ops.push_back(state.operations[i]);
+    }
+    canonical_normalize<NetSize>(normalized_ops, state.current_level, net_size);
+
+    // Print the canonicalized network
+    for (int i = 0; i < state.current_level; ++i) {
+        std::cout << '+' << (i + 1) << ":(" << static_cast<int>(normalized_ops[i].op1) << ','
+                  << static_cast<int>(normalized_ops[i].op2) << ")" << std::endl;
     }
     std::cout << "+Length: " << length << std::endl;
     std::cout << "+Depth : " << depth << std::endl;
@@ -33,7 +43,7 @@ void print_results(const State<NetSize>& state, int length, int depth) {
 template<int NetSize>
 void run_search(const Config& config) {
     LookupTables lookups;
-    lookups.initialize(config, config.use_zobrist());
+    lookups.initialize(config);
 
     BeamSearchContext beam_context(config);
 
@@ -53,7 +63,7 @@ void run_search(const Config& config) {
         state->minimise_depth(config.get_net_size());
         int depth = state->get_depth(config.get_net_size());
 
-        print_results(*state, length, depth);
+        print_results(*state, length, depth, config.get_net_size());
 
         if (length < config.get_length_lower_bound() || depth < config.get_depth_lower_bound()) {
             ++current_iteration;

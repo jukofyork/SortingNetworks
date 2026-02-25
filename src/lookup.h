@@ -4,7 +4,6 @@
 #include "types.h"
 #include <vector>
 #include <cstdint>
-#include <random>
 
 // LookupTables precomputes information about all possible input patterns
 // to speed up the search. For an n-wire network, there are 2^n possible
@@ -14,8 +13,7 @@ public:
     // Initialize lookup tables based on network configuration.
     // Precomputes which patterns are already sorted and which compare-exchange
     // operations are valid for each pattern.
-    // Conditionally initializes Zobrist hashing table based on enable_zobrist flag.
-    void initialize(const Config& config, bool enable_zobrist = true) {
+    void initialize(const Config& config) {
         const int n = config.get_net_size();
         const std::size_t num_patterns = config.get_num_input_patterns();
 
@@ -41,19 +39,6 @@ public:
                 }
             }
         }
-
-        // Initialize Zobrist hash table only if enabled.
-        // This avoids memory overhead when Zobrist hashing is not needed.
-        has_zobrist_ = enable_zobrist;
-        if (enable_zobrist) {
-            zobrist_table_.resize(num_patterns);
-            std::mt19937_64 rng(0xDEADBEEF);  // Fixed seed for reproducibility
-            for (std::size_t i = 0; i < num_patterns; ++i) {
-                zobrist_table_[i] = rng();
-            }
-        } else {
-            zobrist_table_.clear();
-        }
     }
 
     // Check if a given input pattern is already sorted.
@@ -70,17 +55,6 @@ public:
         return static_cast<int>(allowed_ops_[pattern].size());
     }
 
-    // Check if Zobrist hashing is enabled.
-    [[nodiscard]] bool has_zobrist() const {
-        return has_zobrist_;
-    }
-
-    // Get the Zobrist hash value for a pattern.
-    // Used for incremental state hashing in State class.
-    [[nodiscard]] std::uint64_t zobrist_hash(int pattern) const {
-        return has_zobrist_ ? zobrist_table_[pattern] : 0;
-    }
-
 private:
     // Bitmask indicating which patterns are already sorted.
     std::vector<std::uint8_t> is_sorted_;
@@ -88,13 +62,6 @@ private:
     // For each pattern, stores the list of valid compare-exchange operations.
     // An operation is valid if it would actually change the pattern.
     std::vector<std::vector<Operation>> allowed_ops_;
-
-    // Zobrist hash table: random 64-bit value for each pattern.
-    // Used for incremental state hashing to detect duplicate states.
-    std::vector<std::uint64_t> zobrist_table_;
-
-    // Whether Zobrist hashing is enabled for this configuration.
-    bool has_zobrist_ = false;
 
     // Check if a binary pattern represents a sorted sequence.
     // A pattern is sorted if all 0s appear before all 1s.

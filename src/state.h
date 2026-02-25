@@ -13,7 +13,7 @@
 
 // State represents the current progress of sorting network construction.
 // It tracks which input patterns have been sorted and which operations have been applied.
-template<int NetSize, bool EnableHashing = false>
+template<int NetSize>
 class State {
 public:
     using PatternType = typename BitStorage<NetSize>::type;
@@ -35,11 +35,6 @@ public:
     // Sequence of compare-exchange operations applied so far.
     std::vector<Operation> operations;
     int current_level = 0;     // Current number of operations in the sequence
-
-    // Zobrist hash for efficient state comparison and deduplication.
-    // Updated incrementally as patterns are sorted or transformed.
-    // Only used when EnableHashing template parameter is true.
-    std::uint64_t zobrist_hash = 0;
 
     explicit State(const Config& config);
     State(const State& other) = default;
@@ -95,8 +90,8 @@ private:
     }
 };
 
-template<int NetSize, bool EnableHashing>
-State<NetSize, EnableHashing>::State(const Config& config) {
+template<int NetSize>
+State<NetSize>::State(const Config& config) {
     used_list.resize(config.get_num_input_patterns());
     operations.resize(config.get_length_upper_bound());
 }
@@ -104,10 +99,9 @@ State<NetSize, EnableHashing>::State(const Config& config) {
 // Initialize the state with all non-trivial unsorted patterns.
 // Patterns with 0 or 1 ones are trivially sorted, so we start with patterns
 // that have at least 2 ones (indicating potential unsortedness).
-template<int NetSize, bool EnableHashing>
-void State<NetSize, EnableHashing>::set_start_state(const Config& config, const LookupTables& lookups) {
+template<int NetSize>
+void State<NetSize>::set_start_state(const Config& config, const LookupTables& lookups) {
     first_used = -1;
-    zobrist_hash = 0;
 
     for (std::size_t i = 0; i < config.get_num_input_patterns(); ++i) {
         if (lookups.is_sorted(i)) {
@@ -117,10 +111,6 @@ void State<NetSize, EnableHashing>::set_start_state(const Config& config, const 
             used_list[i].next = first_used;
             used_list[i].bit_pattern = static_cast<PatternType>(i);
             first_used = i;
-            // XOR in the Zobrist value for this unsorted pattern (only if enabled at compile time)
-            if constexpr (EnableHashing) {
-                zobrist_hash ^= lookups.zobrist_hash(static_cast<int>(i));
-            }
         }
     }
 
@@ -132,9 +122,8 @@ void State<NetSize, EnableHashing>::set_start_state(const Config& config, const 
 // Apply a compare-exchange operation between wires op1 and op2.
 // For each unsorted pattern, if it has 0 at op1 and 1 at op2, we swap them.
 // This is done by updating the bit pattern and managing the linked list.
-// Also updates the Zobrist hash incrementally to track state changes (if enabled at compile time).
-template<int NetSize, bool EnableHashing>
-void State<NetSize, EnableHashing>::update_state(int op1, int op2, const LookupTables& lookups) {
+template<int NetSize>
+void State<NetSize>::update_state(int op1, int op2, const LookupTables& lookups) {
     int last_index = -1;
 
     for (int used_index = first_used; used_index != -1; ) {
@@ -145,10 +134,6 @@ void State<NetSize, EnableHashing>::update_state(int op1, int op2, const LookupT
         if (((pattern >> op1) & 1) == 0 && ((pattern >> op2) & 1) == 1) {
             // Remove old pattern from tracking
             used_list[static_cast<std::size_t>(pattern)].in_list = 0;
-            // XOR out the old pattern's Zobrist value (only if enabled at compile time)
-            if constexpr (EnableHashing) {
-                zobrist_hash ^= lookups.zobrist_hash(static_cast<int>(pattern));
-            }
 
             // Apply the comparator: set bit at op1, clear bit at op2
             pattern |= (static_cast<PatternType>(1) << op1);
@@ -161,7 +146,7 @@ void State<NetSize, EnableHashing>::update_state(int op1, int op2, const LookupT
                     used_list[last_index].next = next_index;
                 else
                     first_used = next_index;
-                // New pattern is sorted, so it leaves the set - nothing to XOR in
+                // New pattern is sorted, so it leaves the set
             } else {
                 // New pattern needs further sorting, keep in list
                 used_list[static_cast<std::size_t>(pattern)].in_list = 1;
@@ -171,10 +156,6 @@ void State<NetSize, EnableHashing>::update_state(int op1, int op2, const LookupT
                 else
                     first_used = used_index;
                 last_index = used_index;
-                // XOR in the new pattern's Zobrist value (if enabled at compile time)
-                if constexpr (EnableHashing) {
-                    zobrist_hash ^= lookups.zobrist_hash(static_cast<int>(pattern));
-                }
             }
         } else {
             last_index = used_index;
@@ -191,8 +172,8 @@ void State<NetSize, EnableHashing>::update_state(int op1, int op2, const LookupT
 // Select a random unsorted pattern and apply a random valid operation.
 // By picking a random unsorted pattern first, we weight operations by how many
 // patterns they can affect. Operations valid for many patterns are more likely chosen.
-template<int NetSize, bool EnableHashing>
-void State<NetSize, EnableHashing>::do_random_transition(const LookupTables& lookups) {
+template<int NetSize>
+void State<NetSize>::do_random_transition(const LookupTables& lookups) {
     int rand_index = rand_int(num_unsorted - 1);
     int true_index = 0;
     int n = 0;
@@ -210,8 +191,8 @@ void State<NetSize, EnableHashing>::do_random_transition(const LookupTables& loo
     update_state(allowed[rand_op].op1, allowed[rand_op].op2, lookups);
 }
 
-template<int NetSize, bool EnableHashing>
-void State<NetSize, EnableHashing>::print_state() const {
+template<int NetSize>
+void State<NetSize>::print_state() const {
     for (const auto& elem : used_list) {
         std::cout << elem.bit_pattern << ':' << static_cast<int>(elem.in_list) << std::endl;
     }
@@ -222,8 +203,8 @@ void State<NetSize, EnableHashing>::print_state() const {
 // Greedy depth minimization by reordering independent operations.
 // Two operations are independent (can be parallel) if they use different wires.
 // This algorithm greedily moves operations earlier when possible to reduce depth.
-template<int NetSize, bool EnableHashing>
-void State<NetSize, EnableHashing>::minimise_depth(int net_size) {
+template<int NetSize>
+void State<NetSize>::minimise_depth(int net_size) {
     bool altered;
 
     do {
@@ -268,8 +249,8 @@ void State<NetSize, EnableHashing>::minimise_depth(int net_size) {
 // Calculate parallel depth by counting how many layers are needed.
 // A new layer starts when an operation shares a wire with a previous operation
 // in the current layer.
-template<int NetSize, bool EnableHashing>
-int State<NetSize, EnableHashing>::get_depth(int net_size) const {
+template<int NetSize>
+int State<NetSize>::get_depth(int net_size) const {
     std::vector<int> used_ops(net_size, 0);
     int num_used = 1;
 
@@ -289,14 +270,14 @@ int State<NetSize, EnableHashing>::get_depth(int net_size) const {
 // Score a state using Monte Carlo simulation.
 // Runs multiple random completions from this state and returns the average
 // of the best few (elite) results. Lower scores are better.
-template<int NetSize, bool EnableHashing>
-double State<NetSize, EnableHashing>::score_state(const Config& config, const LookupTables& lookups) {
+template<int NetSize>
+double State<NetSize>::score_state(const Config& config, const LookupTables& lookups) {
     std::vector<int> levels;
     std::vector<int> depths;
     levels.reserve(config.get_num_scoring_iterations());
     depths.reserve(config.get_num_scoring_iterations());
 
-    State<NetSize, EnableHashing> temp_state(config);
+    State<NetSize> temp_state(config);
 
     for (int test = 0; test < config.get_num_scoring_iterations(); ++test) {
         temp_state = *this;
@@ -344,8 +325,8 @@ double State<NetSize, EnableHashing>::score_state(const Config& config, const Lo
 // Find all valid successor operations from the current state.
 // An operation is valid if it would change at least one unsorted pattern.
 // Returns the number of valid successors found.
-template<int NetSize, bool EnableHashing>
-int State<NetSize, EnableHashing>::find_successors(std::vector<std::vector<int>>& succ_ops, int net_size) {
+template<int NetSize>
+int State<NetSize>::find_successors(std::vector<std::vector<int>>& succ_ops, int net_size) {
     int allowed = 0;
 
     for (auto& row : succ_ops) {

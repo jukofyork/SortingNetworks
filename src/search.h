@@ -3,6 +3,7 @@
 #include "config.h"
 #include "state.h"
 #include "types.h"
+#include "normalization.h"
 #include <vector>
 #include <algorithm>
 #include <memory>
@@ -29,12 +30,11 @@
 
 // Represents a candidate successor operation to be scored.
 // Used to batch all scoring work into a single parallel region.
-// Includes Zobrist hash for efficient state deduplication (when enabled).
 struct CandidateSuccessor {
     std::size_t beam_index;   // Which beam entry this belongs to
     std::uint8_t op1;         // First wire of comparator
     std::uint8_t op2;         // Second wire of comparator
-    std::uint64_t state_hash; // Zobrist hash of resulting state (only valid if zobrist enabled)
+    std::uint64_t canonical_hash; // Canonical hash for isomorphic deduplication
 };
 
 // BeamSearchContext maintains the state for beam search across iterations.
@@ -87,14 +87,12 @@ inline void BeamSearchContext::resize(const Config& config) {
 // 4. Repeat until a complete sorting network is found
 //
 // Uses parallel candidate collection and scoring with OpenMP.
-// State deduplication via Zobrist hashing when enabled and symmetry is off.
 template<int NetSize>
 int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config, const LookupTables& lookups) {
     const int net_size = config.get_net_size();
     const int max_beam_size = config.get_max_beam_size();
     const int max_ops = config.get_length_upper_bound();
     const bool use_symmetry = config.get_use_symmetry_heuristic();
-    const bool use_zobrist = config.use_zobrist();
 
     if (static_cast<int>(beam.size()) != max_beam_size ||
         (beam.size() > 0 && static_cast<int>(beam[0].size()) != max_ops)) {
@@ -104,10 +102,7 @@ int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config,
     current_beam_size = 1;
 
     for (int level = 0; ; ++level) {
-        if (current_beam_size < max_beam_size)
-            std::cout << level << " [" << current_beam_size << "] ";
-        else
-            std::cout << level << " ";
+        std::cout << level;
         std::cout.flush();
 
         beam_successors.clear();
@@ -126,9 +121,10 @@ int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config,
             local_candidates.clear();
             local_candidates.reserve(256);
 
-            // Thread-local state for reconstruction (with hashing enabled when needed)
-            thread_local State<NetSize, true> thread_state(config);
+            // Thread-local state for reconstruction
+            thread_local State<NetSize> thread_state(config);
             thread_local std::vector<std::vector<int>> thread_succ_ops;
+            thread_local std::vector<Operation> thread_ops;
             if (thread_succ_ops.empty()) {
                 thread_succ_ops.reserve(net_size);
                 for (int i = 0; i < net_size; ++i) {
@@ -175,12 +171,19 @@ int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config,
                     if (n1 != (net_size - 1) - n1 && n1 != (net_size - 1) - n2 &&
                         n2 != (net_size - 1) - n1 && n2 != (net_size - 1) - n2 &&
                         thread_succ_ops[inv_n1][inv_n2] == 1) {
-                        // Apply the operation to get the resulting state's hash
-                        thread_state.update_state(inv_n1, inv_n2, lookups);
+                        // Build operation sequence and compute canonical hash
+                        thread_ops.clear();
+                        for (int j = 0; j < level; ++j) {
+                            thread_ops.push_back(beam[i][j]);
+                        }
+                        thread_ops.push_back(Operation{static_cast<std::uint8_t>(inv_n1),
+                                                       static_cast<std::uint8_t>(inv_n2)});
+                        std::uint64_t hash = compute_canonical_hash<NetSize>(thread_ops,
+                                                            level + 1, net_size);
                         local_candidates.push_back(CandidateSuccessor{static_cast<std::size_t>(i),
                                                                      static_cast<std::uint8_t>(inv_n1),
                                                                      static_cast<std::uint8_t>(inv_n2),
-                                                                     use_zobrist ? thread_state.zobrist_hash : 0});
+                                                                     hash});
                         skip_search = true;
                     }
                 }
@@ -190,16 +193,19 @@ int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config,
                     for (int n1 = 0; n1 < net_size - 1; ++n1) {
                         for (int n2 = n1 + 1; n2 < net_size; ++n2) {
                             if (thread_succ_ops[n1][n2] == 1) {
-                                // Reconstruct base state and apply operation to get hash
-                                thread_state.set_start_state(config, lookups);
+                                // Build operation sequence and compute canonical hash
+                                thread_ops.clear();
                                 for (int j = 0; j < level; ++j) {
-                                    thread_state.update_state(beam[i][j].op1, beam[i][j].op2, lookups);
+                                    thread_ops.push_back(beam[i][j]);
                                 }
-                                thread_state.update_state(n1, n2, lookups);
+                                thread_ops.push_back(Operation{static_cast<std::uint8_t>(n1),
+                                                               static_cast<std::uint8_t>(n2)});
+                                std::uint64_t hash = compute_canonical_hash<NetSize>(thread_ops,
+                                                                    level + 1, net_size);
                                 local_candidates.push_back(CandidateSuccessor{static_cast<std::size_t>(i),
                                                                              static_cast<std::uint8_t>(n1),
                                                                              static_cast<std::uint8_t>(n2),
-                                                                             use_zobrist ? thread_state.zobrist_hash : 0});
+                                                                             hash});
                             }
                         }
                     }
@@ -215,35 +221,25 @@ int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config,
 
         PROFILE_END(candidate_collection, "Candidate collection (parallel)");
 
-        // Deduplicate candidates using Zobrist hashing (only when enabled).
-        // Keep only the first occurrence of each unique state (lowest beam_index).
-        // This significantly reduces redundant scoring work when symmetry is disabled.
-        if (use_zobrist) {
-            PROFILE_START(deduplication);
-
-            std::size_t total_candidates = candidates.size();
+        // Deduplicate candidates using canonical hashing
+        std::size_t before = candidates.size();
+        if (!candidates.empty()) {
             std::unordered_map<std::uint64_t, std::size_t> hash_to_index;
-            hash_to_index.reserve(total_candidates * 2);
+            hash_to_index.reserve(candidates.size() * 2);
 
-            std::size_t unique_count = 0;
-            for (std::size_t i = 0; i < total_candidates; ++i) {
-                auto [it, inserted] = hash_to_index.try_emplace(candidates[i].state_hash, i);
+            std::size_t unique = 0;
+            for (std::size_t i = 0; i < candidates.size(); ++i) {
+                auto [it, inserted] = hash_to_index.try_emplace(candidates[i].canonical_hash, i);
                 if (inserted) {
-                    if (unique_count != i) {
-                        candidates[unique_count] = candidates[i];
+                    if (unique != i) {
+                        candidates[unique] = candidates[i];
                     }
-                    unique_count++;
+                    unique++;
                 }
             }
-            candidates.resize(unique_count);
-
-            PROFILE_END(deduplication, "Deduplication (Zobrist)");
-
-            #ifdef ENABLE_PROFILING
-            std::cout << "[DEDUP] " << total_candidates << " -> " << unique_count
-                      << " (" << (100.0 * (total_candidates - unique_count) / total_candidates) << "% dup)\n";
-            #endif
+            candidates.resize(unique);
         }
+        std::size_t after = candidates.size();
 
         // Handle completed network found during collection
         if (completed_index != -1) {
@@ -255,13 +251,20 @@ int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config,
             return level;
         }
 
+        // Print reduction stats
+        if (before == after) {
+            std::cout << " [" << after << "], ";
+        } else {
+            std::cout << " [" << before << "\u2192" << after << "], ";
+        }
+
         // Phase 2: Score all unique candidates in parallel
         beam_successors.resize(candidates.size());
 
         #pragma omp parallel
         {
-            // Thread-local state for scoring (no hashing needed)
-            thread_local State<NetSize, false> thread_state(config);
+            // Thread-local state for scoring
+            thread_local State<NetSize> thread_state(config);
 
             #pragma omp for schedule(dynamic)
             for (std::size_t idx = 0; idx < candidates.size(); ++idx) {

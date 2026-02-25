@@ -69,7 +69,6 @@ void Config::print_usage(const char* program_name) const {
               << "  -s, --symmetry               Enable symmetry heuristic\n"
               << "  -S, --no-symmetry            Disable symmetry heuristic\n"
               << "                               (default: on for even net_size, off for odd)\n"
-              << "  -z, --zobrist                Enable Zobrist hashing for deduplication\n"
               << "  -w, --depth-weight W         Weight for depth vs length, 0.0-1.0 (default: " << depth_weight_ << ")\n"
               << "  -h, --help                   Show this help message\n"
               << "\n"
@@ -77,8 +76,7 @@ void Config::print_usage(const char* program_name) const {
               << "  " << program_name << " -n 8                    # Search for size-8 network\n"
               << "  " << program_name << " -n 12 -b 500 -t 5       # Search with larger beam\n"
               << "  " << program_name << " -n 17 -s                # Force symmetry for odd size\n"
-              << "  " << program_name << " -n 16 -S                # Disable symmetry for even size\n"
-              << "  " << program_name << " -n 8 -z                 # Use Zobrist hashing\n";
+              << "  " << program_name << " -n 16 -S                # Disable symmetry for even size\n";
 }
 
 void Config::parse_args(int argc, char* argv[]) {
@@ -132,9 +130,6 @@ void Config::parse_args(int argc, char* argv[]) {
             use_symmetry_heuristic_ = false;
             symmetry_explicitly_set_ = true;
         }
-        else if (arg == "-z" || arg == "--zobrist") {
-            use_zobrist_ = true;
-        }
         else if ((arg == "-i" || arg == "--max-iterations") && i + 1 < argc) {
             try {
                 max_iterations_ = std::stoi(argv[++i]);
@@ -159,7 +154,6 @@ void Config::print() const {
               << "NUM_SCORING_TESTS       = " << num_scoring_iterations_ << "\n"
               << "NUM_ELITE_TESTS         = " << num_elites_ << "\n"
               << "USE_SYMMETRY_HEURISTIC  = " << (use_symmetry_heuristic_ ? "Yes" : "No") << "\n"
-              << "USE_ZOBRIST_HASHING     = " << (use_zobrist() ? "Yes" : "No") << "\n"
               << "DEPTH_WEIGHT            = " << depth_weight_ << "\n"
               << "NUM_INPUT_PATTERNS      = " << num_input_patterns_ << "\n"
               << "INPUT_PATTERN_TYPE      = " << input_pattern_type_ << "\n"
