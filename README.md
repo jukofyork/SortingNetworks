@@ -62,7 +62,6 @@ make clean
 | `-e` | `--elite-tests` | Number of elite tests to average | 1 |
 | `-s` | `--symmetry` | Enable symmetry heuristic | auto |
 | `-S` | `--no-symmetry` | Disable symmetry heuristic | auto |
-| `-z` | `--zobrist` | Enable Zobrist hashing for deduplication | off |
 | `-w` | `--depth-weight` | Weight for depth vs length (0.0-1.0) | 0.0001 |
 | `-h` | `--help` | Show help message | - |
 
@@ -75,8 +74,6 @@ make clean
 **Elite Tests (`-e`)**: Number of best-scoring simulations to average when computing a state's final score. Must be less than or equal to scoring tests. Using 1-2 elites works well.
 
 **Depth Weight (`-w`)**: Trade-off between optimizing for network length vs depth. Values near 0.0 prioritize shorter networks; values near 1.0 prioritize shallower networks. The default 0.0001 slightly prefers shorter networks.
-
-**Zobrist Hashing (`-z`)**: Enables state deduplication using Zobrist hashing. This can significantly reduce redundant work when the symmetry heuristic is disabled. Has modest memory overhead.
 
 ### Symmetry Heuristic
 
@@ -115,11 +112,6 @@ Optimize primarily for depth:
 ./sorting_networks -n 16 -w 0.8
 ```
 
-Enable Zobrist hashing for deduplication:
-```bash
-./sorting_networks -n 8 -z
-```
-
 ## Output Format
 
 The program outputs configuration parameters followed by search progress and results:
@@ -131,7 +123,6 @@ MAX_BEAM_SIZE           = 100
 NUM_SCORING_TESTS       = 5
 NUM_ELITE_TESTS         = 1
 USE_SYMMETRY_HEURISTIC  = Yes
-USE_ZOBRIST_HASHING     = No
 DEPTH_WEIGHT            = 0.0001
 NUM_INPUT_PATTERNS      = 256
 INPUT_PATTERN_TYPE      = uint8_t
@@ -140,25 +131,38 @@ LENGTH_UPPER_BOUND      = 38
 DEPTH_LOWER_BOUND       = 6
 
 Iteration 1:
-0 [1] 1 [28] 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19
-+1:(0,2)
-+2:(1,3)
-+3:(4,6)
-+4:(5,7)
-...
-+19:(3,4)
+0 [28→1], 1 [1], 2 [26→4], 3 [4], 4 [95→42], 5 [239→145], 6 [724→479], 7 [693→557], 8 [544→478], 9 [578→532], 10 [469→450], 11 [420→386], 12 [403→384], 13 [320→292], 14 [214→166], 15 [254→223], 16 [225→199], 17 [134→106], 18 [119→74], 19
++1:(0,4)
++2:(1,5)
++3:(2,6)
++4:(3,7)
++5:(0,7)
++6:(1,6)
++7:(2,5)
++8:(3,4)
++9:(0,1)
++10:(2,3)
++11:(4,6)
++12:(5,7)
++13:(0,2)
++14:(1,3)
++15:(0,4)
++16:(1,5)
++17:(0,1)
++18:(2,4)
++19:(3,5)
 +Length: 19
 +Depth : 6
 
 Total Iterations  : 1
-Total Time        : 0.247 seconds
+Total Time        : 0.0435381 seconds
 ```
 
 ### Output Fields
 
 - **Iteration N:** Marks the start of a new search iteration
 - **Level numbers (0, 1, 2...):** Current depth in the beam search
-- **[N]:** Current beam size at that level
+- **[N→M]:** Deduplication stats showing candidates before and after canonical normalization
 - **+N:(A,B):** The Nth comparator, operating between wires A and B
 - **+Length:** Total number of comparators in the network
 - **+Depth:** Number of parallel layers (network execution time)
@@ -173,17 +177,19 @@ The algorithm performs a breadth-first search with a fixed beam width (maximum n
 
 2. **Expansion**: For each candidate in the current beam, generate all possible next comparators that would make progress (affect at least one unsorted input pattern)
 
-3. **Scoring**: Evaluate each candidate using Monte Carlo simulation:
+3. **Deduplication**: Use canonical normalization to detect and eliminate isomorphic states, significantly reducing redundant work
+
+4. **Scoring**: Evaluate each candidate using Monte Carlo simulation:
    - Run multiple random completions from the current state
    - Each completion randomly selects valid comparators until all input patterns are sorted
    - Calculate length and depth for each completion
    - Average the best (elite) completions to get a score
 
-4. **Selection**: Keep the best-scoring candidates up to the beam width
+5. **Selection**: Keep the best-scoring candidates up to the beam width
 
-5. **Termination**: Stop when a candidate has no valid successors (all input patterns are sorted)
+6. **Termination**: Stop when a candidate has no valid successors (all input patterns are sorted)
 
-6. **Post-processing**: Apply greedy depth minimization by reordering independent comparators
+7. **Post-processing**: Apply greedy depth minimization by reordering independent comparators
 
 ### State Representation
 
@@ -192,7 +198,7 @@ The algorithm tracks which input patterns remain unsorted using a compact bit re
 - For an n-input network, there are 2^n possible binary input patterns
 - Patterns are represented using the smallest unsigned integer type that fits (uint8_t for n≤8, uint16_t for n≤16, uint32_t for n≤32)
 - An intrusive linked list tracks unsorted patterns for efficient iteration
-- Zobrist hashing provides fast state comparison and deduplication
+- Canonical normalization using the "Normalize" algorithm from Figure 7 of Choi & Moon's paper maps isomorphic networks to identical representations for efficient deduplication
 
 ### Monte Carlo Scoring
 
@@ -260,7 +266,7 @@ The target upper bounds are automatically set based on these best known results.
 - **Parallelism**: OpenMP for multi-threaded evaluation
 - **Memory**: Dynamic allocation scales with 2^n for n-input networks
 - **Random Number Generation**: Thread-local Mersenne Twister with unique seeds per thread
-- **State Deduplication**: Optional Zobrist hashing eliminates redundant states
+- **State Deduplication**: Canonical normalization eliminates isomorphic redundant states using the algorithm from Choi & Moon (2002)
 - **Pattern Storage**: Template-selected integer type based on network size
 
 ## Performance Considerations
@@ -271,6 +277,8 @@ The target upper bounds are automatically set based on these best known results.
 
 ## References
 
+- Choi, S.-S., & Moon, B.-R. (2002). Isomorphism, normalization, and a genetic algorithm for sorting network optimization. In *Proceedings of the 4th Annual Conference on Genetic and Evolutionary Computation* (pp. 327–334). https://gpbib.pmacs.upenn.edu/gecco2002/GA242.pdf
+  - This implementation uses the "Normalize" algorithm from Figure 7 of this paper for canonical normalization of sorting networks.
 - Best known sorting network bounds: https://bertdobbelaere.github.io/sorting_networks.html
 - Sorting network theory and applications: Knuth, "The Art of Computer Programming, Vol. 3: Sorting and Searching"
 - Beam search for combinatorial optimization: Original algorithm by Lowerre (1976)
