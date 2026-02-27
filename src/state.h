@@ -10,6 +10,7 @@
 #include <random>
 #include <thread>
 #include <cstdint>
+#include <utility>
 
 // State represents the current progress of sorting network construction.
 // It tracks which input patterns have been sorted and which operations have been applied.
@@ -65,8 +66,8 @@ public:
     [[nodiscard]] int get_depth(int net_size) const;
 
     // Score this state using Monte Carlo simulation.
-    // Runs multiple random completions and returns average of elite samples.
-    [[nodiscard]] double score_state(const Config& config, const LookupTables& lookups);
+    // Runs multiple random completions and returns vector of (length, depth) samples.
+    [[nodiscard]] std::vector<std::pair<int, int>> score_state(const Config& config, const LookupTables& lookups);
 
     // Find all valid successor operations from current state.
     // An operation is valid if it would change at least one unsorted pattern.
@@ -268,14 +269,11 @@ int State<NetSize>::get_depth(int net_size) const {
 }
 
 // Score a state using Monte Carlo simulation.
-// Runs multiple random completions from this state and returns the average
-// of the best few (elite) results. Lower scores are better.
+// Runs multiple random completions from this state and returns vector of (length, depth) samples.
 template<int NetSize>
-double State<NetSize>::score_state(const Config& config, const LookupTables& lookups) {
-    std::vector<int> levels;
-    std::vector<int> depths;
-    levels.reserve(config.get_num_scoring_iterations());
-    depths.reserve(config.get_num_scoring_iterations());
+std::vector<std::pair<int, int>> State<NetSize>::score_state(const Config& config, const LookupTables& lookups) {
+    std::vector<std::pair<int, int>> results;
+    results.reserve(config.get_num_scoring_iterations());
 
     State<NetSize> temp_state(config);
 
@@ -288,38 +286,10 @@ double State<NetSize>::score_state(const Config& config, const LookupTables& loo
         }
 
         temp_state.minimise_depth(config.get_net_size());
-
-        levels.push_back(temp_state.current_level);
-        depths.push_back(temp_state.get_depth(config.get_net_size()));
+        results.emplace_back(temp_state.current_level, temp_state.get_depth(config.get_net_size()));
     }
 
-    // Pair and sort by the configured priority (length or depth)
-    std::vector<std::pair<int, int>> results;
-    results.reserve(config.get_num_scoring_iterations());
-    for (int i = 0; i < config.get_num_scoring_iterations(); ++i) {
-        results.emplace_back(levels[i], depths[i]);
-    }
-
-    std::sort(results.begin(), results.end(), [&config](const auto& a, const auto& b) {
-        if (config.get_depth_weight() < 0.5) {
-            return a.first < b.first || (a.first == b.first && a.second < b.second);
-        } else {
-            return a.second < b.second || (a.second == b.second && a.first < b.first);
-        }
-    });
-
-    // Average the elite (best) samples
-    double length_sum = 0;
-    double depth_sum = 0;
-    for (int test = 0; test < config.get_num_elites(); ++test) {
-        length_sum += results[test].first;
-        depth_sum += results[test].second;
-    }
-
-    double mean_length = length_sum / config.get_num_elites();
-    double mean_depth = depth_sum / config.get_num_elites();
-
-    return ((1.0 - config.get_depth_weight()) * mean_length) + (config.get_depth_weight() * mean_depth);
+    return results;
 }
 
 // Find all valid successor operations from the current state.

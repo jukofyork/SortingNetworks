@@ -253,49 +253,129 @@ int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config,
 
         // Print reduction stats
         if (before == after) {
-            std::cout << " [" << after << "], ";
+            std::cout << " [" << after << "]";
         } else {
-            std::cout << " [" << before << "\u2192" << after << "], ";
+            std::cout << " [" << before << "\u2192" << after << "]";
         }
 
-        // Phase 2: Score all unique candidates in parallel
-        beam_successors.resize(candidates.size());
+        // Phase 2: Successive Halving with accumulated samples
+        // Each round adds num_tests new samples to accumulated evidence
+        // num_elites scales proportionally with total samples
+        std::vector<size_t> active_indices(candidates.size());
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            active_indices[i] = i;
+        }
 
-        #pragma omp parallel
-        {
-            // Thread-local state for scoring
-            thread_local State<NetSize> thread_state(config);
+        // Accumulated samples: candidate_idx -> vector of (length, depth)
+        std::vector<std::vector<std::pair<int, int>>> accumulated_samples(candidates.size());
+        std::vector<double> scores(candidates.size());
 
-            #pragma omp for schedule(dynamic)
-            for (std::size_t idx = 0; idx < candidates.size(); ++idx) {
-                const auto& cand = candidates[idx];
+        const int num_tests = config.get_num_scoring_iterations();
+        const double depth_weight = config.get_depth_weight();
+        const int base_elites = config.get_num_elites();
 
-                thread_state.set_start_state(config, lookups);
-                for (int j = 0; j < level; ++j) {
-                    thread_state.update_state(beam[cand.beam_index][j].op1,
-                                              beam[cand.beam_index][j].op2, lookups);
+        // Keep halving until we can't without going below beam_size
+        int round = 0;
+        while (active_indices.size() > static_cast<size_t>(max_beam_size)) {
+            round++;
+            
+            // Add num_tests new samples for each active candidate
+            #pragma omp parallel
+            {
+                thread_local State<NetSize> thread_state(config);
+                
+                #pragma omp for schedule(dynamic)
+                for (std::size_t idx = 0; idx < active_indices.size(); ++idx) {
+                    size_t cand_idx = active_indices[idx];
+                    const auto& cand = candidates[cand_idx];
+                    
+                    thread_state.set_start_state(config, lookups);
+                    for (int j = 0; j < level; ++j) {
+                        thread_state.update_state(beam[cand.beam_index][j].op1,
+                                                  beam[cand.beam_index][j].op2, lookups);
+                    }
+                    thread_state.update_state(cand.op1, cand.op2, lookups);
+                    
+                    // Collect num_tests new samples
+                    auto new_samples = thread_state.score_state(config, lookups);
+                    #pragma omp critical
+                    {
+                        accumulated_samples[cand_idx].insert(
+                            accumulated_samples[cand_idx].end(),
+                            new_samples.begin(),
+                            new_samples.end()
+                        );
+                    }
                 }
-
-                thread_state.update_state(cand.op1, cand.op2, lookups);
-                double score = thread_state.score_state(config, lookups);
-
-                beam_successors[idx].beam_index = cand.beam_index;
-                beam_successors[idx].operation.op1 = cand.op1;
-                beam_successors[idx].operation.op2 = cand.op2;
-                beam_successors[idx].score = score;
             }
+            
+            // Compute scores from accumulated samples with proportional num_elites
+            for (size_t cand_idx : active_indices) {
+                auto& samples = accumulated_samples[cand_idx];
+                int total_samples = samples.size();
+                int num_elites = std::max(1, (base_elites * total_samples) / num_tests);
+                
+                // Sort by priority (length or depth)
+                std::sort(samples.begin(), samples.end(),
+                          [depth_weight](const auto& a, const auto& b) {
+                              if (depth_weight < 0.5) {
+                                  return a.first < b.first || (a.first == b.first && a.second < b.second);
+                              } else {
+                                  return a.second < b.second || (a.second == b.second && a.first < b.first);
+                              }
+                          });
+                
+                // Average top num_elites
+                double length_sum = 0, depth_sum = 0;
+                for (int i = 0; i < std::min(num_elites, total_samples); ++i) {
+                    length_sum += samples[i].first;
+                    depth_sum += samples[i].second;
+                }
+                int n = std::min(num_elites, total_samples);
+                double mean_length = length_sum / n;
+                double mean_depth = depth_sum / n;
+                scores[cand_idx] = ((1.0 - depth_weight) * mean_length) + (depth_weight * mean_depth);
+            }
+            
+            // Sort active candidates by score
+            std::sort(active_indices.begin(), active_indices.end(),
+                      [&scores](int a, int b) { return scores[a] < scores[b]; });
+            
+            // Keep top 50% (but ensure we don't go below max_beam_size)
+            size_t new_size = active_indices.size() / 2;
+            if (new_size < static_cast<size_t>(max_beam_size)) {
+                break;
+            }
+            active_indices.resize(new_size);
+        }
+
+        // Print number of scoring rounds (or - if none)
+        if (round == 0) {
+            std::cout << " (-), ";
+        } else {
+            std::cout << " (" << round << "), ";
+        }
+
+        // Build final beam_successors from active candidates
+        size_t final_size = std::min(active_indices.size(), static_cast<size_t>(max_beam_size));
+        beam_successors.resize(final_size);
+        
+        // Ensure sorted by score for final selection
+        std::sort(active_indices.begin(), active_indices.end(),
+                  [&scores](size_t a, size_t b) { return scores[a] < scores[b]; });
+        
+        for (size_t i = 0; i < final_size; ++i) {
+            size_t cand_idx = active_indices[i];
+            beam_successors[i].beam_index = candidates[cand_idx].beam_index;
+            beam_successors[i].operation.op1 = candidates[cand_idx].op1;
+            beam_successors[i].operation.op2 = candidates[cand_idx].op2;
+            beam_successors[i].score = scores[cand_idx];
         }
 
         PROFILE_END(successor_gen, "Successor generation (incl parallel scoring)");
-        PROFILE_START(sorting);
-
-        std::sort(beam_successors.begin(), beam_successors.end(),
-                  [](const auto& a, const auto& b) { return a.score < b.score; });
-
-        PROFILE_END(sorting, "Sorting successors");
         PROFILE_START(reconstruction);
 
-        current_beam_size = std::min(static_cast<int>(beam_successors.size()), max_beam_size);
+        current_beam_size = static_cast<int>(beam_successors.size());
 
         for (int i = 0; i < current_beam_size; ++i) {
             for (int j = 0; j < level; ++j)
