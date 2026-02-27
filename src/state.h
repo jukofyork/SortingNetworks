@@ -10,7 +10,6 @@
 #include <random>
 #include <thread>
 #include <cstdint>
-#include <utility>
 
 // State represents the current progress of sorting network construction.
 // It tracks which input patterns have been sorted and which operations have been applied.
@@ -65,9 +64,9 @@ public:
     // Two operations can be in the same layer if they use disjoint sets of wires.
     [[nodiscard]] int get_depth(int net_size) const;
 
-    // Score this state using Monte Carlo simulation.
-    // Runs multiple random completions and returns vector of (length, depth) samples.
-    [[nodiscard]] std::vector<std::pair<int, int>> score_state(const Config& config, const LookupTables& lookups);
+    // Score this state using fixed number of Monte Carlo simulations.
+    // Runs exactly num_tests simulations and returns the mean score.
+    [[nodiscard]] double score_state(int num_tests, double depth_weight, const LookupTables& lookups);
 
     // Find all valid successor operations from current state.
     // An operation is valid if it would change at least one unsorted pattern.
@@ -268,16 +267,14 @@ int State<NetSize>::get_depth(int net_size) const {
     return num_used;
 }
 
-// Score a state using Monte Carlo simulation.
-// Runs multiple random completions from this state and returns vector of (length, depth) samples.
+// Score a state using fixed number of Monte Carlo simulations.
+// Runs exactly num_tests simulations and returns the mean score.
 template<int NetSize>
-std::vector<std::pair<int, int>> State<NetSize>::score_state(const Config& config, const LookupTables& lookups) {
-    std::vector<std::pair<int, int>> results;
-    results.reserve(config.get_num_scoring_iterations());
+double State<NetSize>::score_state(int num_tests, double depth_weight, const LookupTables& lookups) {
+    double total_score = 0.0;
+    State<NetSize> temp_state(*this);
 
-    State<NetSize> temp_state(config);
-
-    for (int test = 0; test < config.get_num_scoring_iterations(); ++test) {
+    for (int test = 0; test < num_tests; ++test) {
         temp_state = *this;
 
         // Complete the network with random operations
@@ -285,11 +282,15 @@ std::vector<std::pair<int, int>> State<NetSize>::score_state(const Config& confi
             temp_state.do_random_transition(lookups);
         }
 
-        temp_state.minimise_depth(config.get_net_size());
-        results.emplace_back(temp_state.current_level, temp_state.get_depth(config.get_net_size()));
+        temp_state.minimise_depth(NetSize);
+
+        double length = temp_state.current_level;
+        double depth = temp_state.get_depth(NetSize);
+        double score = (1.0 - depth_weight) * length + depth_weight * depth;
+        total_score += score;
     }
 
-    return results;
+    return total_score / num_tests;
 }
 
 // Find all valid successor operations from the current state.

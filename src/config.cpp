@@ -25,13 +25,6 @@ void Config::initialize() {
         throw std::invalid_argument("num_scoring_iterations must be at least 1");
     }
 
-    if (num_elites_ < 1) {
-        throw std::invalid_argument("num_elites must be at least 1");
-    }
-    if (num_elites_ > num_scoring_iterations_) {
-        throw std::invalid_argument("num_elites cannot exceed num_scoring_iterations");
-    }
-
     if (depth_weight_ < 0.0 || depth_weight_ > 1.0) {
         throw std::invalid_argument("depth_weight must be between 0.0 and 1.0");
     }
@@ -64,8 +57,7 @@ void Config::print_usage(const char* program_name) const {
               << "  -n, --net-size SIZE          Network size, 2-32 (default: " << net_size_ << ")\n"
               << "                               Note: Sizes > 20 require significant memory (2^n patterns)\n"
               << "  -b, --beam-size SIZE         Beam width (default: " << max_beam_size_ << ")\n"
-              << "  -t, --scoring-tests N        Number of scoring tests per state (default: " << num_scoring_iterations_ << ")\n"
-              << "  -e, --elite-tests N          Number of elite tests to average (default: " << num_elites_ << ")\n"
+              << "  -t, --scoring-tests N        Number of scoring tests per candidate in first round (default: " << num_scoring_iterations_ << ")\n"
               << "  -s, --symmetry               Enable symmetry heuristic\n"
               << "  -S, --no-symmetry            Disable symmetry heuristic\n"
               << "                               (default: on for even net_size, off for odd)\n"
@@ -101,18 +93,11 @@ void Config::parse_args(int argc, char* argv[]) {
                 throw std::invalid_argument("Invalid value for --beam-size");
             }
         }
-        else if ((arg == "-t" || arg == "--scoring-iterations") && i + 1 < argc) {
+        else if ((arg == "-t" || arg == "--scoring-tests") && i + 1 < argc) {
             try {
                 num_scoring_iterations_ = std::stoi(argv[++i]);
             } catch (const std::exception&) {
-                throw std::invalid_argument("Invalid value for --scoring-iterations");
-            }
-        }
-        else if ((arg == "-e" || arg == "--elites") && i + 1 < argc) {
-            try {
-                num_elites_ = std::stoi(argv[++i]);
-            } catch (const std::exception&) {
-                throw std::invalid_argument("Invalid value for --elites");
+                throw std::invalid_argument("Invalid value for --scoring-tests");
             }
         }
         else if ((arg == "-w" || arg == "--depth-weight") && i + 1 < argc) {
@@ -152,7 +137,6 @@ void Config::print() const {
               << "NET_SIZE                = " << net_size_ << "\n"
               << "MAX_BEAM_SIZE           = " << max_beam_size_ << "\n"
               << "NUM_SCORING_TESTS       = " << num_scoring_iterations_ << "\n"
-              << "NUM_ELITE_TESTS         = " << num_elites_ << "\n"
               << "USE_SYMMETRY_HEURISTIC  = " << (use_symmetry_heuristic_ ? "Yes" : "No") << "\n"
               << "DEPTH_WEIGHT            = " << depth_weight_ << "\n"
               << "NUM_INPUT_PATTERNS      = " << num_input_patterns_ << "\n"
