@@ -57,7 +57,7 @@ void compute_neighbor_sums(const std::vector<Operation>& ops, int num_ops,
 // Greedy canonical labeling algorithm from Choi & Moon paper
 // Assigns labels based on structural properties (degree, connectivity)
 template<int NetSize>
-std::array<std::uint8_t, 32> compute_canonical_mapping(const std::vector<Operation>& ops, 
+std::array<std::uint8_t, MAX_NET_SIZE> compute_canonical_mapping(const std::vector<Operation>& ops, 
                                                        int num_ops, int net_size) {
     std::array<std::uint8_t, MAX_NET_SIZE> mapping;
     std::array<bool, MAX_NET_SIZE> assigned;
@@ -114,7 +114,7 @@ std::array<std::uint8_t, 32> compute_canonical_mapping(const std::vector<Operati
 // Apply canonical mapping to a sequence of operations
 template<int NetSize>
 void apply_canonical_mapping(std::vector<Operation>& ops, int num_ops, 
-                             const std::array<std::uint8_t, 32>& mapping) {
+                             const std::array<std::uint8_t, MAX_NET_SIZE>& mapping) {
     for (int i = 0; i < num_ops; ++i) {
         std::uint8_t new_op1 = mapping[ops[i].op1];
         std::uint8_t new_op2 = mapping[ops[i].op2];
