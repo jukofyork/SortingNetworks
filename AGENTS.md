@@ -18,6 +18,9 @@ make clean
 # Build and run
 make run
 
+# Build benchmark executable
+make bench
+
 # Run tests
 ./test.sh
 ```
@@ -37,7 +40,7 @@ make run
 - **Member Variables**: snake_case (`current_level`, `max_beam_size`)
 - **No global variables**: Pass configuration and lookup tables by reference
 - **Type Aliases**: Use standard types (`std::uint8_t`, `std::uint16_t`, `std::size_t`)
-- **Constants**: ALL_CAPS or snake_case (`MAX_BEAM_SIZE`, `net_size`)
+- **Constants**: ALL_CAPS for global constants (`MAX_NET_SIZE`, `END_OF_LIST`, `INVALID_LABEL`)
 - **Template Parameters**: PascalCase
 
 ### File Organization
@@ -147,5 +150,38 @@ This will:
 - Dependencies passed by reference: `const Config& config`, `const LookupTables& lookups`
 - Smart pointers for RAII: `std::make_unique<State>(config)`
 - Bit manipulation for vector representation
-- Beam search with parallel successor evaluation using `std::thread`
+- Beam search with parallel successor evaluation using OpenMP
 - Stochastic scoring with thread-local RNG
+
+## Refactored Architecture
+
+The codebase has been refactored for clarity and maintainability:
+
+### Named Constants
+All magic numbers replaced with constants in `src/types.h`:
+- `END_OF_LIST = -1` - Linked list terminator
+- `INVALID_LABEL = 255` - Invalid marker for canonical mapping
+- `MAX_NET_SIZE = 32` - Maximum supported network size
+- `NUM_NET_SIZE_CASES = 31` - Number of network size variants
+
+### Helper Functions
+- `build_operation_sequence()` - Builds operation sequences with canonical hashing
+- `copy_candidates_to_successors()` - Copies candidates to successor structures
+
+### Beam Search Phases
+The `beam_search()` method is split into 4 phase methods:
+1. `collect_candidates_parallel()` - OpenMP parallel candidate collection
+2. `deduplicate_candidates()` - Canonical hash deduplication
+3. `select_best_candidates()` - Successive halving algorithm with scoring
+4. `rebuild_beam()` - Beam reconstruction from selected successors
+
+### Performance Hints
+Hot functions marked with compiler hints:
+- `[[gnu::always_inline]]` - Force inlining (update_state, do_random_transition)
+- `[[gnu::flatten]]` - Aggressive inlining (score_state, minimise_depth, get_depth)
+- `[[nodiscard]]` - Return value must not be ignored
+
+### State Representation
+- Intrusive linked list (`unsorted_patterns`) tracks unsorted input patterns
+- Template-selected integer type based on network size (uint8_t, uint16_t, uint32_t)
+- Canonical normalization eliminates isomorphic redundant states
