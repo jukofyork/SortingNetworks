@@ -51,26 +51,26 @@ public:
     // Apply a compare-exchange operation to all unsorted patterns.
     // This updates the linked list by moving patterns to their new values
     // or removing them if they become sorted.
-    void update_state(int op1, int op2, const LookupTables& lookups);
+    [[gnu::always_inline]] inline void update_state(int op1, int op2, const LookupTables& lookups);
 
     // Select a random unsorted pattern and apply a random valid operation to it.
     // By picking a random unsorted pattern first, we weight operations by how many
     // patterns they can affect. Operations valid for many patterns are more likely chosen.
-    void do_random_transition(const LookupTables& lookups);
+    [[gnu::always_inline]] inline void do_random_transition(const LookupTables& lookups);
 
     void print_state() const;
 
     // Greedy algorithm to minimize parallel depth by reordering operations.
     // Attempts to maximize parallelism while preserving correctness.
-    void minimise_depth(int net_size);
+    [[gnu::flatten]] inline void minimise_depth(int net_size);
 
     // Calculate the parallel depth (number of parallel layers) of the network.
     // Two operations can be in the same layer if they use disjoint sets of wires.
-    [[nodiscard]] int get_depth(int net_size) const;
+    [[gnu::flatten]] [[nodiscard]] inline int get_depth(int net_size) const;
 
     // Score this state using fixed number of Monte Carlo simulations.
     // Runs exactly num_tests simulations and returns the mean score.
-    [[nodiscard]] double score_state(int num_tests, double depth_weight, const LookupTables& lookups);
+    [[gnu::flatten]] [[nodiscard]] inline double score_state(int num_tests, double depth_weight, const LookupTables& lookups);
 
     // Find all valid successor operations from current state.
     // An operation is valid if it would change at least one unsorted pattern.
@@ -127,7 +127,7 @@ void State<NetSize>::set_start_state(const Config& config, const LookupTables& l
 // For each unsorted pattern, if it has 0 at op1 and 1 at op2, we swap them.
 // This is done by updating the bit pattern and managing the linked list.
 template<int NetSize>
-void State<NetSize>::update_state(int op1, int op2, const LookupTables& lookups) {
+[[gnu::always_inline]] inline void State<NetSize>::update_state(int op1, int op2, const LookupTables& lookups) {
     int last_index = END_OF_LIST;
 
     for (int used_index = first_used; used_index != END_OF_LIST; ) {
@@ -177,7 +177,7 @@ void State<NetSize>::update_state(int op1, int op2, const LookupTables& lookups)
 // By picking a random unsorted pattern first, we weight operations by how many
 // patterns they can affect. Operations valid for many patterns are more likely chosen.
 template<int NetSize>
-void State<NetSize>::do_random_transition(const LookupTables& lookups) {
+[[gnu::always_inline]] inline void State<NetSize>::do_random_transition(const LookupTables& lookups) {
     int rand_index = rand_int(num_unsorted - 1);
     int true_index = 0;
     int n = 0;
@@ -208,7 +208,7 @@ void State<NetSize>::print_state() const {
 // Two operations are independent (can be parallel) if they use different wires.
 // This algorithm greedily moves operations earlier when possible to reduce depth.
 template<int NetSize>
-void State<NetSize>::minimise_depth(int net_size) {
+[[gnu::flatten]] inline void State<NetSize>::minimise_depth(int net_size) {
     bool altered;
 
     do {
@@ -254,7 +254,7 @@ void State<NetSize>::minimise_depth(int net_size) {
 // A new layer starts when an operation shares a wire with a previous operation
 // in the current layer.
 template<int NetSize>
-int State<NetSize>::get_depth(int net_size) const {
+[[gnu::flatten]] inline int State<NetSize>::get_depth(int net_size) const {
     std::vector<int> used_ops(net_size, 0);
     int num_used = 1;
 
@@ -274,7 +274,7 @@ int State<NetSize>::get_depth(int net_size) const {
 // Score a state using fixed number of Monte Carlo simulations.
 // Runs exactly num_tests simulations and returns the mean score.
 template<int NetSize>
-double State<NetSize>::score_state(int num_tests, double depth_weight, const LookupTables& lookups) {
+[[gnu::flatten]] inline double State<NetSize>::score_state(int num_tests, double depth_weight, const LookupTables& lookups) {
     double total_score = 0.0;
     State<NetSize> temp_state(*this);
 
