@@ -34,7 +34,7 @@ inline std::uint64_t fnv1a_hash(const std::vector<Operation>& ops, int num_ops) 
 // Compute degree of each bus based on operation sequence
 template<int NetSize>
 void compute_bus_degrees(const std::vector<Operation>& ops, int num_ops, 
-                         std::array<int, 32>& degrees) {
+                         std::array<int, MAX_NET_SIZE>& degrees) {
     degrees.fill(0);
     for (int i = 0; i < num_ops; ++i) {
         degrees[ops[i].op1]++;
@@ -45,8 +45,8 @@ void compute_bus_degrees(const std::vector<Operation>& ops, int num_ops,
 // Compute sum of neighbor degrees for tie-breaking
 template<int NetSize>
 void compute_neighbor_sums(const std::vector<Operation>& ops, int num_ops,
-                           const std::array<int, 32>& degrees,
-                           std::array<int, 32>& neighbor_sums) {
+                           const std::array<int, MAX_NET_SIZE>& degrees,
+                           std::array<int, MAX_NET_SIZE>& neighbor_sums) {
     neighbor_sums.fill(0);
     for (int i = 0; i < num_ops; ++i) {
         neighbor_sums[ops[i].op1] += degrees[ops[i].op2];
@@ -59,14 +59,14 @@ void compute_neighbor_sums(const std::vector<Operation>& ops, int num_ops,
 template<int NetSize>
 std::array<std::uint8_t, 32> compute_canonical_mapping(const std::vector<Operation>& ops, 
                                                        int num_ops, int net_size) {
-    std::array<std::uint8_t, 32> mapping;
-    std::array<bool, 32> assigned;
-    mapping.fill(255);  // Invalid marker
+    std::array<std::uint8_t, MAX_NET_SIZE> mapping;
+    std::array<bool, MAX_NET_SIZE> assigned;
+    mapping.fill(INVALID_LABEL);  // Invalid marker
     assigned.fill(false);
     
     // Compute structural signatures
-    std::array<int, 32> degrees;
-    std::array<int, 32> neighbor_sums;
+    std::array<int, MAX_NET_SIZE> degrees;
+    std::array<int, MAX_NET_SIZE> neighbor_sums;
     compute_bus_degrees<NetSize>(ops, num_ops, degrees);
     compute_neighbor_sums<NetSize>(ops, num_ops, degrees, neighbor_sums);
     

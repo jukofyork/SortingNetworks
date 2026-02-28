@@ -29,7 +29,7 @@ public:
     // Linked list tracking unsorted input patterns.
     // Uses intrusive linked list stored in used_list for O(1) removal/insertion.
     std::vector<ListElement> used_list;
-    int first_used = -1;       // Index of first unsorted pattern in linked list
+    int first_used = END_OF_LIST;       // Index of first unsorted pattern in linked list
     int num_unsorted = 0;      // Number of patterns still needing to be sorted
 
     // Sequence of compare-exchange operations applied so far.
@@ -101,7 +101,7 @@ State<NetSize>::State(const Config& config) {
 // that have at least 2 ones (indicating potential unsortedness).
 template<int NetSize>
 void State<NetSize>::set_start_state(const Config& config, const LookupTables& lookups) {
-    first_used = -1;
+    first_used = END_OF_LIST;
 
     for (std::size_t i = 0; i < config.get_num_input_patterns(); ++i) {
         if (lookups.is_sorted(i)) {
@@ -124,9 +124,9 @@ void State<NetSize>::set_start_state(const Config& config, const LookupTables& l
 // This is done by updating the bit pattern and managing the linked list.
 template<int NetSize>
 void State<NetSize>::update_state(int op1, int op2, const LookupTables& lookups) {
-    int last_index = -1;
+    int last_index = END_OF_LIST;
 
-    for (int used_index = first_used; used_index != -1; ) {
+    for (int used_index = first_used; used_index != END_OF_LIST; ) {
         int next_index = used_list[used_index].next;
         PatternType pattern = used_list[used_index].bit_pattern;
 
@@ -142,7 +142,7 @@ void State<NetSize>::update_state(int op1, int op2, const LookupTables& lookups)
             // Check if the new pattern is now sorted
             if (used_list[static_cast<std::size_t>(pattern)].in_list == 1 || lookups.is_sorted(static_cast<int>(pattern))) {
                 num_unsorted--;
-                if (last_index != -1)
+                if (last_index != END_OF_LIST)
                     used_list[last_index].next = next_index;
                 else
                     first_used = next_index;
@@ -151,7 +151,7 @@ void State<NetSize>::update_state(int op1, int op2, const LookupTables& lookups)
                 // New pattern needs further sorting, keep in list
                 used_list[static_cast<std::size_t>(pattern)].in_list = 1;
                 used_list[used_index].bit_pattern = pattern;
-                if (last_index != -1)
+                if (last_index != END_OF_LIST)
                     used_list[last_index].next = used_index;
                 else
                     first_used = used_index;
@@ -178,7 +178,7 @@ void State<NetSize>::do_random_transition(const LookupTables& lookups) {
     int true_index = 0;
     int n = 0;
 
-    for (int i = first_used; i != -1; i = used_list[i].next) {
+    for (int i = first_used; i != END_OF_LIST; i = used_list[i].next) {
         if (n == rand_index) {
             true_index = static_cast<int>(used_list[i].bit_pattern);
             break;
@@ -305,7 +305,7 @@ int State<NetSize>::find_successors(std::vector<std::vector<int>>& succ_ops, int
     }
 
     // Check all unsorted patterns to see which operations would affect them
-    for (int i = first_used; i != -1; i = used_list[i].next) {
+    for (int i = first_used; i != END_OF_LIST; i = used_list[i].next) {
         PatternType pattern = used_list[i].bit_pattern;
         for (int n1 = 0; n1 < net_size - 1; ++n1) {
             for (int n2 = n1 + 1; n2 < net_size; ++n2) {

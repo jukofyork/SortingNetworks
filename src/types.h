@@ -20,3 +20,8 @@ struct BitStorage {
                    std::conditional_t<(N <= 16), std::uint16_t,
                    std::uint32_t>>;
 };
+
+inline constexpr int END_OF_LIST = -1;
+inline constexpr std::uint8_t INVALID_LABEL = 255;
+inline constexpr int MAX_NET_SIZE = 32;
+inline constexpr int NUM_NET_SIZE_CASES = 31;
