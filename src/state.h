@@ -144,6 +144,7 @@ template<int NetSize>
             pattern &= (~(static_cast<PatternType>(1) << op2));
 
             // Check if the new pattern is now sorted
+            // Check both: if already in list (duplicate) OR if now sorted
             if (used_list[static_cast<std::size_t>(pattern)].in_list == 1 || lookups.is_sorted(static_cast<int>(pattern))) {
                 num_unsorted--;
                 if (last_index != END_OF_LIST)

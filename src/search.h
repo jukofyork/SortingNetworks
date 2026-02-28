@@ -90,6 +90,24 @@ public:
     // Returns the length of the best network found.
     template<int NetSize>
     [[nodiscard]] int beam_search(State<NetSize>& result, const Config& config, const LookupTables& lookups);
+
+    // Phase 1: Collect candidate successors in parallel.
+    // Returns index of a completed network if found, -1 otherwise.
+    template<int NetSize>
+    [[gnu::flatten]] int collect_candidates_parallel(int level, int net_size, bool use_symmetry,
+                                                        const Config& config, const LookupTables& lookups);
+
+    // Phase 2: Deduplicate candidates using canonical hashing.
+    // Returns pair of (before_count, after_count).
+    std::pair<std::size_t, std::size_t> deduplicate_candidates();
+
+    // Phase 3: Select best candidates using successive halving algorithm.
+    template<int NetSize>
+    [[gnu::flatten]] void select_best_candidates(int level, int max_beam_size,
+                                                  const Config& config, const LookupTables& lookups);
+
+    // Phase 4: Rebuild beam from selected successors.
+    void rebuild_beam(int level);
 };
 
 inline void BeamSearchContext::resize(const Config& config) {
@@ -150,127 +168,14 @@ int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config,
         PROFILE_START(successor_gen);
         PROFILE_START(candidate_collection);
 
-        // Check for completed network and collect candidates in parallel
-        int completed_index = -1;
-
-        #pragma omp parallel
-        {
-            // Thread-local storage for candidates to avoid synchronization
-            thread_local std::vector<CandidateSuccessor> local_candidates;
-            local_candidates.clear();
-            local_candidates.reserve(256);
-
-            // Thread-local state for reconstruction
-            thread_local State<NetSize> thread_state(config);
-            thread_local std::vector<std::vector<int>> thread_succ_ops;
-            thread_local std::vector<Operation> thread_ops;
-            if (thread_succ_ops.empty()) {
-                thread_succ_ops.reserve(net_size);
-                for (int i = 0; i < net_size; ++i) {
-                    thread_succ_ops.emplace_back(net_size, 0);
-                }
-            }
-
-            #pragma omp for schedule(dynamic)
-            for (int i = 0; i < current_beam_size; ++i) {
-                // Check if another thread already found a complete network
-                if (completed_index != -1) continue;
-
-                // Reconstruct state for this beam entry
-                thread_state.set_start_state(config, lookups);
-                for (int j = 0; j < level; ++j) {
-                    thread_state.update_state(beam[i][j].op1, beam[i][j].op2, lookups);
-                }
-
-                // Clear successor matrix
-                for (auto& row : thread_succ_ops) {
-                    std::fill(row.begin(), row.end(), 0);
-                }
-                int num_succs = thread_state.find_successors(thread_succ_ops, net_size);
-
-                // Check for complete network
-                if (num_succs == 0) {
-                    #pragma omp critical
-                    {
-                        if (completed_index == -1) {
-                            completed_index = i;
-                        }
-                    }
-                    continue;
-                }
-
-                // Symmetry heuristic
-                bool skip_search = false;
-                if (use_symmetry && level >= 1) {
-                    int n1 = beam[i][level - 1].op1;
-                    int n2 = beam[i][level - 1].op2;
-                    int inv_n1 = (net_size - 1) - n2;
-                    int inv_n2 = (net_size - 1) - n1;
-
-                    if (n1 != (net_size - 1) - n1 && n1 != (net_size - 1) - n2 &&
-                        n2 != (net_size - 1) - n1 && n2 != (net_size - 1) - n2 &&
-                        thread_succ_ops[inv_n1][inv_n2] == 1) {
-                        std::uint64_t hash = build_operation_sequence<NetSize>(
-                            thread_ops, beam[i], level, 
-                            static_cast<std::uint8_t>(inv_n1), 
-                            static_cast<std::uint8_t>(inv_n2), 
-                            net_size);
-                        local_candidates.push_back(CandidateSuccessor{static_cast<std::size_t>(i),
-                                                                     static_cast<std::uint8_t>(inv_n1),
-                                                                     static_cast<std::uint8_t>(inv_n2),
-                                                                     hash});
-                        skip_search = true;
-                    }
-                }
-
-                // Collect valid successors
-                if (!skip_search) {
-                    for (int n1 = 0; n1 < net_size - 1; ++n1) {
-                        for (int n2 = n1 + 1; n2 < net_size; ++n2) {
-                            if (thread_succ_ops[n1][n2] == 1) {
-                                std::uint64_t hash = build_operation_sequence<NetSize>(
-                                    thread_ops, beam[i], level, 
-                                    static_cast<std::uint8_t>(n1), 
-                                    static_cast<std::uint8_t>(n2), 
-                                    net_size);
-                                local_candidates.push_back(CandidateSuccessor{static_cast<std::size_t>(i),
-                                                                             static_cast<std::uint8_t>(n1),
-                                                                             static_cast<std::uint8_t>(n2),
-                                                                             hash});
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Merge thread-local candidates into global list
-            #pragma omp critical
-            {
-                candidates.insert(candidates.end(), local_candidates.begin(), local_candidates.end());
-            }
-        }
+        // Phase 1: Collect candidates in parallel
+        int completed_index = collect_candidates_parallel<NetSize>(level, net_size, use_symmetry,
+                                                                    config, lookups);
 
         PROFILE_END(candidate_collection, "Candidate collection (parallel)");
 
-        // Deduplicate candidates using canonical hashing
-        std::size_t before = candidates.size();
-        if (!candidates.empty()) {
-            std::unordered_map<std::uint64_t, std::size_t> hash_to_index;
-            hash_to_index.reserve(candidates.size() * 2);
-
-            std::size_t unique = 0;
-            for (std::size_t i = 0; i < candidates.size(); ++i) {
-                auto [it, inserted] = hash_to_index.try_emplace(candidates[i].canonical_hash, i);
-                if (inserted) {
-                    if (unique != i) {
-                        candidates[unique] = candidates[i];
-                    }
-                    unique++;
-                }
-            }
-            candidates.resize(unique);
-        }
-        std::size_t after = candidates.size();
+        // Phase 2: Deduplicate candidates
+        auto [before, after] = deduplicate_candidates();
 
         // Handle completed network found during collection
         if (completed_index != -1) {
@@ -288,122 +193,260 @@ int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config,
         } else {
             std::cout << " [" << before << "\u2192" << after << "] ";
         }
-        
-        // Do we actually need to run the search or can we just skip it?
-        if (candidates.size() > static_cast<size_t>(max_beam_size)) {
 
-            // Phase 2: Successive Halving Algorithm
-            // Implements Algorithm 1 from "Sequential Halving" paper
-            std::vector<size_t> active_indices(candidates.size());
-            for (size_t i = 0; i < candidates.size(); ++i) {
-                active_indices[i] = i;
-            }
-
-            // Calculate rounds until beam_size: ceil(log2(initial_candidates / max_beam_size))
-            size_t initial_count = candidates.size();
-            const int base_num_tests = config.get_num_scoring_iterations();
-            const double depth_weight = config.get_depth_weight();
-
-            // Calculate number of rounds until we hit beam_size
-            int num_rounds = static_cast<int>(std::ceil(
-                std::log2(static_cast<double>(initial_count) / max_beam_size)
-            ));
-
-            // Calculate T: ceil(base_num_tests / num_rounds)
-            // This ensures total samples >= base_num_tests * initial_count
-            // Using T-1 would give total < base_num_tests * initial_count
-            int tests_per_candidate = static_cast<int>(std::ceil(
-                static_cast<double>(base_num_tests) / num_rounds
-            ));
-
-            // Scores from current round only (not accumulated)
-            std::vector<double> scores(candidates.size());
-
-            // Keep halving until we can't without going below beam_size
-            int round = 0;
-            while (active_indices.size() > static_cast<size_t>(max_beam_size)) {
-                round++;
-                
-                // Print tests per candidate for this round
-                std::cout << "{" << tests_per_candidate << "} ";
-
-                // Run fresh tests for each active candidate (no accumulation)
-                #pragma omp parallel
-                {
-                    thread_local State<NetSize> thread_state(config);
-
-                    #pragma omp for schedule(dynamic)
-                    for (std::size_t idx = 0; idx < active_indices.size(); ++idx) {
-                        size_t cand_idx = active_indices[idx];
-                        const auto& cand = candidates[cand_idx];
-
-                        thread_state.set_start_state(config, lookups);
-                        for (int j = 0; j < level; ++j) {
-                            thread_state.update_state(beam[cand.beam_index][j].op1,
-                                                      beam[cand.beam_index][j].op2, lookups);
-                        }
-                        thread_state.update_state(cand.op1, cand.op2, lookups);
-
-                        // Run fixed number of tests and get mean score
-                        double score = thread_state.score_state(tests_per_candidate, depth_weight, lookups);
-                        #pragma omp critical
-                        {
-                            scores[cand_idx] = score;
-                        }
-                    }
-                }
-
-                // Sort active candidates by score (lower is better)
-                std::sort(active_indices.begin(), active_indices.end(),
-                          [&scores](size_t a, size_t b) { return scores[a] < scores[b]; });
-
-                // Keep top 50% (but ensure we don't go below max_beam_size)
-                size_t new_size = active_indices.size() / 2;
-                if (new_size < static_cast<size_t>(max_beam_size)) {
-                    break;
-                }
-                active_indices.resize(new_size);
-
-                // Double tests for next round
-                tests_per_candidate *= 2;
-            }
-    
-            // Build final beam_successors from active candidates
-            size_t final_size = std::min(active_indices.size(), static_cast<size_t>(max_beam_size));
-            
-            // Extract selected candidates and scores via active_indices
-            std::vector<CandidateSuccessor> selected_candidates;
-            std::vector<double> selected_scores;
-            selected_candidates.reserve(final_size);
-            selected_scores.reserve(final_size);
-            for (size_t i = 0; i < final_size; ++i) {
-                size_t cand_idx = active_indices[i];
-                selected_candidates.push_back(candidates[cand_idx]);
-                selected_scores.push_back(scores[cand_idx]);
-            }
-            copy_candidates_to_successors(beam_successors, selected_candidates, selected_scores, 
-                                          final_size);
-            
-        } else {
-            // No halving needed - copy all candidates directly
-            copy_candidates_to_successors(beam_successors, candidates, {}, candidates.size());
-        }
+        // Phase 3: Select best candidates
+        select_best_candidates<NetSize>(level, max_beam_size, config, lookups);
 
         PROFILE_END(successor_gen, "Successor generation (incl parallel scoring)");
         PROFILE_START(reconstruction);
 
-        current_beam_size = static_cast<int>(beam_successors.size());
-
-        for (int i = 0; i < current_beam_size; ++i) {
-            for (int j = 0; j < level; ++j)
-                temp_beam[i][j] = beam[beam_successors[i].beam_index][j];
-            temp_beam[i][level] = beam_successors[i].operation;
-        }
-
-        for (int i = 0; i < current_beam_size; ++i)
-            for (int j = 0; j <= level; ++j)
-                beam[i][j] = temp_beam[i][j];
+        // Phase 4: Rebuild beam
+        rebuild_beam(level);
 
         PROFILE_END(reconstruction, "Beam reconstruction");
     }
+}
+
+template<int NetSize>
+int BeamSearchContext::collect_candidates_parallel(int level, int net_size, bool use_symmetry,
+                                                    const Config& config, const LookupTables& lookups) {
+    int completed_index = -1;
+
+    #pragma omp parallel
+    {
+        // Thread-local storage for candidates to avoid synchronization
+        thread_local std::vector<CandidateSuccessor> local_candidates;
+        local_candidates.clear();
+        local_candidates.reserve(256);
+
+        // Thread-local state for reconstruction
+        thread_local State<NetSize> thread_state(config);
+        thread_local std::vector<std::vector<int>> thread_succ_ops;
+        thread_local std::vector<Operation> thread_ops;
+        if (thread_succ_ops.empty()) {
+            thread_succ_ops.reserve(net_size);
+            for (int i = 0; i < net_size; ++i) {
+                thread_succ_ops.emplace_back(net_size, 0);
+            }
+        }
+
+        #pragma omp for schedule(dynamic)
+        for (int i = 0; i < current_beam_size; ++i) {
+            // Check if another thread already found a complete network
+            if (completed_index != -1) continue;
+
+            // Reconstruct state for this beam entry
+            thread_state.set_start_state(config, lookups);
+            for (int j = 0; j < level; ++j) {
+                thread_state.update_state(beam[i][j].op1, beam[i][j].op2, lookups);
+            }
+
+            // Clear successor matrix
+            for (auto& row : thread_succ_ops) {
+                std::fill(row.begin(), row.end(), 0);
+            }
+            int num_succs = thread_state.find_successors(thread_succ_ops, net_size);
+
+            // Check for complete network
+            if (num_succs == 0) {
+                #pragma omp critical
+                {
+                    if (completed_index == -1) {
+                        completed_index = i;
+                    }
+                }
+                continue;
+            }
+
+            // Symmetry heuristic
+            bool skip_search = false;
+            if (use_symmetry && level >= 1) {
+                int n1 = beam[i][level - 1].op1;
+                int n2 = beam[i][level - 1].op2;
+                int inv_n1 = (net_size - 1) - n2;
+                int inv_n2 = (net_size - 1) - n1;
+
+                if (n1 != (net_size - 1) - n1 && n1 != (net_size - 1) - n2 &&
+                    n2 != (net_size - 1) - n1 && n2 != (net_size - 1) - n2 &&
+                    thread_succ_ops[inv_n1][inv_n2] == 1) {
+                    std::uint64_t hash = build_operation_sequence<NetSize>(
+                        thread_ops, beam[i], level,
+                        static_cast<std::uint8_t>(inv_n1),
+                        static_cast<std::uint8_t>(inv_n2),
+                        net_size);
+                    local_candidates.push_back(CandidateSuccessor{static_cast<std::size_t>(i),
+                                                                 static_cast<std::uint8_t>(inv_n1),
+                                                                 static_cast<std::uint8_t>(inv_n2),
+                                                                 hash});
+                    skip_search = true;
+                }
+            }
+
+            // Collect valid successors
+            if (!skip_search) {
+                for (int n1 = 0; n1 < net_size - 1; ++n1) {
+                    for (int n2 = n1 + 1; n2 < net_size; ++n2) {
+                        if (thread_succ_ops[n1][n2] == 1) {
+                            std::uint64_t hash = build_operation_sequence<NetSize>(
+                                thread_ops, beam[i], level,
+                                static_cast<std::uint8_t>(n1),
+                                static_cast<std::uint8_t>(n2),
+                                net_size);
+                            local_candidates.push_back(CandidateSuccessor{static_cast<std::size_t>(i),
+                                                                         static_cast<std::uint8_t>(n1),
+                                                                         static_cast<std::uint8_t>(n2),
+                                                                         hash});
+                        }
+                    }
+                }
+            }
+        }
+
+        // Merge thread-local candidates into global list
+        #pragma omp critical
+        {
+            candidates.insert(candidates.end(), local_candidates.begin(), local_candidates.end());
+        }
+    }
+
+    return completed_index;
+}
+
+std::pair<std::size_t, std::size_t> BeamSearchContext::deduplicate_candidates() {
+    std::size_t before = candidates.size();
+    if (!candidates.empty()) {
+        std::unordered_map<std::uint64_t, std::size_t> hash_to_index;
+        hash_to_index.reserve(candidates.size() * 2);
+
+        std::size_t unique = 0;
+        for (std::size_t i = 0; i < candidates.size(); ++i) {
+            auto [it, inserted] = hash_to_index.try_emplace(candidates[i].canonical_hash, i);
+            if (inserted) {
+                if (unique != i) {
+                    candidates[unique] = candidates[i];
+                }
+                unique++;
+            }
+        }
+        candidates.resize(unique);
+    }
+    std::size_t after = candidates.size();
+    return {before, after};
+}
+
+template<int NetSize>
+void BeamSearchContext::select_best_candidates(int level, int max_beam_size,
+                                                const Config& config, const LookupTables& lookups) {
+    const double depth_weight = config.get_depth_weight();
+
+    if (candidates.size() <= static_cast<size_t>(max_beam_size)) {
+        // No halving needed - copy all candidates directly
+        copy_candidates_to_successors(beam_successors, candidates, {}, candidates.size());
+        return;
+    }
+
+    // Phase 2: Successive Halving Algorithm
+    // Implements Algorithm 1 from "Sequential Halving" paper
+    std::vector<size_t> active_indices(candidates.size());
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        active_indices[i] = i;
+    }
+
+    // Calculate rounds until beam_size: ceil(log2(initial_candidates / max_beam_size))
+    size_t initial_count = candidates.size();
+    const int base_num_tests = config.get_num_scoring_iterations();
+
+    // Calculate number of rounds until we hit beam_size
+    int num_rounds = static_cast<int>(std::ceil(
+        std::log2(static_cast<double>(initial_count) / max_beam_size)
+    ));
+
+    // Calculate T: ceil(base_num_tests / num_rounds)
+    // This ensures total samples >= base_num_tests * initial_count
+    // Using T-1 would give total < base_num_tests * initial_count
+    int tests_per_candidate = static_cast<int>(std::ceil(
+        static_cast<double>(base_num_tests) / num_rounds
+    ));
+
+    // Scores from current round only (not accumulated)
+    std::vector<double> scores(candidates.size());
+
+    // Keep halving until we can't without going below beam_size
+    int round = 0;
+    while (active_indices.size() > static_cast<size_t>(max_beam_size)) {
+        round++;
+
+        // Print tests per candidate for this round
+        std::cout << "{" << tests_per_candidate << "} ";
+
+        // Run fresh tests for each active candidate (no accumulation)
+        #pragma omp parallel
+        {
+            thread_local State<NetSize> thread_state(config);
+
+            #pragma omp for schedule(dynamic)
+            for (std::size_t idx = 0; idx < active_indices.size(); ++idx) {
+                size_t cand_idx = active_indices[idx];
+                const auto& cand = candidates[cand_idx];
+
+                thread_state.set_start_state(config, lookups);
+                for (int j = 0; j < level; ++j) {
+                    thread_state.update_state(beam[cand.beam_index][j].op1,
+                                              beam[cand.beam_index][j].op2, lookups);
+                }
+                thread_state.update_state(cand.op1, cand.op2, lookups);
+
+                // Run fixed number of tests and get mean score
+                double score = thread_state.score_state(tests_per_candidate, depth_weight, lookups);
+                #pragma omp critical
+                {
+                    scores[cand_idx] = score;
+                }
+            }
+        }
+
+        // Sort active candidates by score (lower is better)
+        std::sort(active_indices.begin(), active_indices.end(),
+                  [&scores](size_t a, size_t b) { return scores[a] < scores[b]; });
+
+        // Keep top 50% (but ensure we don't go below max_beam_size)
+        size_t new_size = active_indices.size() / 2;
+        if (new_size < static_cast<size_t>(max_beam_size)) {
+            break;
+        }
+        active_indices.resize(new_size);
+
+        // Double tests for next round
+        tests_per_candidate *= 2;
+    }
+
+    // Build final beam_successors from active candidates
+    size_t final_size = std::min(active_indices.size(), static_cast<size_t>(max_beam_size));
+
+    // Extract selected candidates and scores via active_indices
+    std::vector<CandidateSuccessor> selected_candidates;
+    std::vector<double> selected_scores;
+    selected_candidates.reserve(final_size);
+    selected_scores.reserve(final_size);
+    for (size_t i = 0; i < final_size; ++i) {
+        size_t cand_idx = active_indices[i];
+        selected_candidates.push_back(candidates[cand_idx]);
+        selected_scores.push_back(scores[cand_idx]);
+    }
+    copy_candidates_to_successors(beam_successors, selected_candidates, selected_scores,
+                                  final_size);
+}
+
+void BeamSearchContext::rebuild_beam(int level) {
+    current_beam_size = static_cast<int>(beam_successors.size());
+
+    for (int i = 0; i < current_beam_size; ++i) {
+        for (int j = 0; j < level; ++j)
+            temp_beam[i][j] = beam[beam_successors[i].beam_index][j];
+        temp_beam[i][level] = beam_successors[i].operation;
+    }
+
+    for (int i = 0; i < current_beam_size; ++i)
+        for (int j = 0; j <= level; ++j)
+            beam[i][j] = temp_beam[i][j];
 }

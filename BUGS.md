@@ -36,34 +36,25 @@ static int rand_int(int n) {
 
 ---
 
-## Optimization Opportunities
+## Invalid Optimizations (Do NOT Apply)
 
-### OPT-001: Redundant Check in update_state()
+### OPT-001: Redundant Check in update_state() - **INVALID**
 
-**Location:** `src/state.h:143`
+**Location:** `src/state.h:147`
 
-**Description:**
-The condition checks both `used_list[pattern].in_list == 1` and `lookups.is_sorted(pattern)`, but the first check already implies the pattern is unsorted.
+**Status:** INVALID - Do not apply this optimization
 
-**Current Code:**
-```cpp
-if (used_list[static_cast<std::size_t>(pattern)].in_list == 1 || 
-    lookups.is_sorted(static_cast<int>(pattern))) {
-```
+**Why it's wrong:**
+The `is_sorted()` check is necessary for the **NEW pattern** after applying the comparator transformation, not the old pattern. When we transform pattern A into pattern B by applying a comparator, pattern B might be sorted even though pattern A wasn't. The `in_list` check only tells us if pattern B was already in the list (duplicate), but doesn't tell us if pattern B is now sorted.
 
-**Rationale for Simplification:**
-- Patterns are only added to `used_list` if `!is_sorted()` (see `set_start_state()`)
-- If `in_list == 1`, the pattern is already known to be unsorted
-- The `is_sorted()` check is redundant
+**If removed:**
+- Sorted patterns can end up in `used_list`
+- `do_random_transition()` will try to select operations from an empty `allowed_ops` list
+- Results in segmentation fault when accessing `allowed[rand_op]` on empty vector
 
-**Suggested Fix:**
-```cpp
-if (used_list[static_cast<std::size_t>(pattern)].in_list == 1) {
-```
-
-**Impact:** Minor - removes one function call in hot path
-
-**Status:** Optional optimization for future refactoring
+**Conclusion:** The original code is correct. Both checks are necessary:
+1. `in_list == 1` - checks if new pattern is a duplicate (already being tracked)
+2. `is_sorted()` - checks if new pattern is now sorted (no operations needed)
 
 ---
 
