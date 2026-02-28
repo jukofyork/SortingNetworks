@@ -2,6 +2,7 @@
 *.o
 *.obj
 sorting_networks
+benchmark
 
 # Build directories
 /build/
@@ -33,3 +34,7 @@ Thumbs.db
 # Test output
 error.log
 test.sh
+
+# Benchmark artifacts
+benchmark.sh
+logs/
