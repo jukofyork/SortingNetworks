@@ -80,6 +80,12 @@ public:
 
     void resize(const Config& config);
 
+    inline void copy_candidates_to_successors(
+        std::vector<StateSuccessor>& successors,
+        const std::vector<CandidateSuccessor>& candidates,
+        const std::vector<double>& scores,
+        size_t count);
+
     // Perform beam search starting from an empty network.
     // Returns the length of the best network found.
     template<int NetSize>
@@ -94,6 +100,21 @@ inline void BeamSearchContext::resize(const Config& config) {
     temp_beam.assign(max_beam_size, std::vector<Operation>(max_ops));
     beam_successors.reserve(static_cast<std::size_t>(max_beam_size) * config.get_branching_factor());
     candidates.reserve(static_cast<std::size_t>(max_beam_size) * config.get_branching_factor());
+}
+
+inline void BeamSearchContext::copy_candidates_to_successors(
+    std::vector<StateSuccessor>& successors,
+    const std::vector<CandidateSuccessor>& candidates,
+    const std::vector<double>& scores,
+    size_t count) {
+
+    successors.resize(count);
+    for (size_t i = 0; i < count; ++i) {
+        successors[i].beam_index = candidates[i].beam_index;
+        successors[i].operation.op1 = candidates[i].op1;
+        successors[i].operation.op2 = candidates[i].op2;
+        successors[i].score = scores.empty() ? 0.0 : scores[i];
+    }
 }
 
 // Beam search algorithm for finding optimal sorting networks.
@@ -349,26 +370,23 @@ int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config,
     
             // Build final beam_successors from active candidates
             size_t final_size = std::min(active_indices.size(), static_cast<size_t>(max_beam_size));
-            beam_successors.resize(final_size);
             
-            // Already sorted by the time we get here, so just copy the remaining candidates
+            // Extract selected candidates and scores via active_indices
+            std::vector<CandidateSuccessor> selected_candidates;
+            std::vector<double> selected_scores;
+            selected_candidates.reserve(final_size);
+            selected_scores.reserve(final_size);
             for (size_t i = 0; i < final_size; ++i) {
                 size_t cand_idx = active_indices[i];
-                beam_successors[i].beam_index = candidates[cand_idx].beam_index;
-                beam_successors[i].operation.op1 = candidates[cand_idx].op1;
-                beam_successors[i].operation.op2 = candidates[cand_idx].op2;
-                beam_successors[i].score = scores[cand_idx];
+                selected_candidates.push_back(candidates[cand_idx]);
+                selected_scores.push_back(scores[cand_idx]);
             }
+            copy_candidates_to_successors(beam_successors, selected_candidates, selected_scores, 
+                                          final_size);
             
         } else {
             // No halving needed - copy all candidates directly
-            beam_successors.resize(candidates.size());
-            for (size_t i = 0; i < candidates.size(); ++i) {
-                beam_successors[i].beam_index = candidates[i].beam_index;
-                beam_successors[i].operation.op1 = candidates[i].op1;
-                beam_successors[i].operation.op2 = candidates[i].op2;
-                beam_successors[i].score = 0.0;
-            }
+            copy_candidates_to_successors(beam_successors, candidates, {}, candidates.size());
         }
 
         PROFILE_END(successor_gen, "Successor generation (incl parallel scoring)");
