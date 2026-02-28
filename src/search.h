@@ -38,6 +38,23 @@ struct CandidateSuccessor {
     std::uint64_t canonical_hash; // Canonical hash for isomorphic deduplication
 };
 
+template<int NetSize>
+[[gnu::always_inline]] inline
+std::uint64_t build_operation_sequence(std::vector<Operation>& ops,
+                                        const std::vector<Operation>& beam_ops,
+                                        int level,
+                                        std::uint8_t new_op1,
+                                        std::uint8_t new_op2,
+                                        int net_size) {
+    ops.clear();
+    ops.reserve(level + 1);
+    for (int j = 0; j < level; ++j) {
+        ops.push_back(beam_ops[j]);
+    }
+    ops.push_back(Operation{new_op1, new_op2});
+    return compute_canonical_hash<NetSize>(ops, level + 1, net_size);
+}
+
 // BeamSearchContext maintains the state for beam search across iterations.
 // The beam holds the top-k most promising partial networks found so far.
 class BeamSearchContext {
@@ -172,15 +189,11 @@ int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config,
                     if (n1 != (net_size - 1) - n1 && n1 != (net_size - 1) - n2 &&
                         n2 != (net_size - 1) - n1 && n2 != (net_size - 1) - n2 &&
                         thread_succ_ops[inv_n1][inv_n2] == 1) {
-                        // Build operation sequence and compute canonical hash
-                        thread_ops.clear();
-                        for (int j = 0; j < level; ++j) {
-                            thread_ops.push_back(beam[i][j]);
-                        }
-                        thread_ops.push_back(Operation{static_cast<std::uint8_t>(inv_n1),
-                                                       static_cast<std::uint8_t>(inv_n2)});
-                        std::uint64_t hash = compute_canonical_hash<NetSize>(thread_ops,
-                                                            level + 1, net_size);
+                        std::uint64_t hash = build_operation_sequence<NetSize>(
+                            thread_ops, beam[i], level, 
+                            static_cast<std::uint8_t>(inv_n1), 
+                            static_cast<std::uint8_t>(inv_n2), 
+                            net_size);
                         local_candidates.push_back(CandidateSuccessor{static_cast<std::size_t>(i),
                                                                      static_cast<std::uint8_t>(inv_n1),
                                                                      static_cast<std::uint8_t>(inv_n2),
@@ -194,15 +207,11 @@ int BeamSearchContext::beam_search(State<NetSize>& result, const Config& config,
                     for (int n1 = 0; n1 < net_size - 1; ++n1) {
                         for (int n2 = n1 + 1; n2 < net_size; ++n2) {
                             if (thread_succ_ops[n1][n2] == 1) {
-                                // Build operation sequence and compute canonical hash
-                                thread_ops.clear();
-                                for (int j = 0; j < level; ++j) {
-                                    thread_ops.push_back(beam[i][j]);
-                                }
-                                thread_ops.push_back(Operation{static_cast<std::uint8_t>(n1),
-                                                               static_cast<std::uint8_t>(n2)});
-                                std::uint64_t hash = compute_canonical_hash<NetSize>(thread_ops,
-                                                                    level + 1, net_size);
+                                std::uint64_t hash = build_operation_sequence<NetSize>(
+                                    thread_ops, beam[i], level, 
+                                    static_cast<std::uint8_t>(n1), 
+                                    static_cast<std::uint8_t>(n2), 
+                                    net_size);
                                 local_candidates.push_back(CandidateSuccessor{static_cast<std::size_t>(i),
                                                                              static_cast<std::uint8_t>(n1),
                                                                              static_cast<std::uint8_t>(n2),
