@@ -107,12 +107,12 @@ Add comprehensive comment:
 
 ```cpp
 // Intrusive linked list tracking unsorted input patterns
-// INVARIANT: used_list[i].in_list == 1  <=>  pattern i is currently unsorted
+// INVARIANT: unsorted_patterns[i].in_list == 1  <=>  pattern i is currently unsorted
 // INVARIANT: first_used == END_OF_LIST  <=>  num_unsorted == 0
 // INVARIANT: num_unsorted == count of nodes in linked list
 // PERFORMANCE: Stored in contiguous vector for cache efficiency
 // NOTE: Name is historical; contains ONLY unsorted patterns despite "used" name
-std::vector<ListElement> used_list;
+std::vector<ListElement> unsorted_patterns;
 int first_used = END_OF_LIST;
 int num_unsorted = 0;
 ```
@@ -278,7 +278,7 @@ public:
 
 ## What NOT to Do (High Risk, Low Reward)
 
-### DO NOT: Rename `used_list` -> `unsorted_patterns`
+### DONE: Rename `used_list` -> `unsorted_patterns`
 
 **Why:** 
 - Touches 8+ locations across hot loops
@@ -394,7 +394,7 @@ double calculate_score(double length, double depth, double depth_weight) {
 
 1. Phase 1.1: Add constants and benchmarks (do this first!)
 2. Phase 1.3: Fix rand_int range bug
-3. Phase 2.1: Document used_list design
+3. Phase 2.1: Document unsorted_patterns design
 4. Run benchmarks, establish baseline
 5. Phase 2.2: Extract build_operation_sequence helper
 6. Phase 2.3: Extract copy_candidates_to_successors helper

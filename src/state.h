@@ -27,12 +27,11 @@ public:
     };
 
     // Intrusive linked list tracking unsorted input patterns
-    // INVARIANT: used_list[i].in_list == 1  <=>  pattern i is currently unsorted
+    // INVARIANT: unsorted_patterns[i].in_list == 1  <=>  pattern i is currently unsorted
     // INVARIANT: first_used == END_OF_LIST  <=>  num_unsorted == 0
     // INVARIANT: num_unsorted == count of nodes in linked list
     // PERFORMANCE: Stored in contiguous vector for cache efficiency
-    // NOTE: Name is historical; contains ONLY unsorted patterns despite "used" name
-    std::vector<ListElement> used_list;
+    std::vector<ListElement> unsorted_patterns;
     int first_used = END_OF_LIST;
     int num_unsorted = 0;
 
@@ -96,7 +95,7 @@ private:
 
 template<int NetSize>
 State<NetSize>::State(const Config& config) {
-    used_list.resize(config.get_num_input_patterns());
+    unsorted_patterns.resize(config.get_num_input_patterns());
     operations.resize(config.get_length_upper_bound());
 }
 
@@ -109,11 +108,11 @@ void State<NetSize>::set_start_state(const Config& config, const LookupTables& l
 
     for (std::size_t i = 0; i < config.get_num_input_patterns(); ++i) {
         if (lookups.is_sorted(i)) {
-            used_list[i].in_list = 0;
+            unsorted_patterns[i].in_list = 0;
         } else {
-            used_list[i].in_list = 1;
-            used_list[i].next = first_used;
-            used_list[i].bit_pattern = static_cast<PatternType>(i);
+            unsorted_patterns[i].in_list = 1;
+            unsorted_patterns[i].next = first_used;
+            unsorted_patterns[i].bit_pattern = static_cast<PatternType>(i);
             first_used = i;
         }
     }
@@ -131,13 +130,13 @@ template<int NetSize>
     int last_index = END_OF_LIST;
 
     for (int used_index = first_used; used_index != END_OF_LIST; ) {
-        int next_index = used_list[used_index].next;
-        PatternType pattern = used_list[used_index].bit_pattern;
+        int next_index = unsorted_patterns[used_index].next;
+        PatternType pattern = unsorted_patterns[used_index].bit_pattern;
 
         // Check if this pattern would be affected by the comparator (op1, op2)
         if (((pattern >> op1) & 1) == 0 && ((pattern >> op2) & 1) == 1) {
             // Remove old pattern from tracking
-            used_list[static_cast<std::size_t>(pattern)].in_list = 0;
+            unsorted_patterns[static_cast<std::size_t>(pattern)].in_list = 0;
 
             // Apply the comparator: set bit at op1, clear bit at op2
             pattern |= (static_cast<PatternType>(1) << op1);
@@ -145,19 +144,19 @@ template<int NetSize>
 
             // Check if the new pattern is now sorted
             // Check both: if already in list (duplicate) OR if now sorted
-            if (used_list[static_cast<std::size_t>(pattern)].in_list == 1 || lookups.is_sorted(static_cast<int>(pattern))) {
+            if (unsorted_patterns[static_cast<std::size_t>(pattern)].in_list == 1 || lookups.is_sorted(static_cast<int>(pattern))) {
                 num_unsorted--;
                 if (last_index != END_OF_LIST)
-                    used_list[last_index].next = next_index;
+                    unsorted_patterns[last_index].next = next_index;
                 else
                     first_used = next_index;
                 // New pattern is sorted, so it leaves the set
             } else {
                 // New pattern needs further sorting, keep in list
-                used_list[static_cast<std::size_t>(pattern)].in_list = 1;
-                used_list[used_index].bit_pattern = pattern;
+                unsorted_patterns[static_cast<std::size_t>(pattern)].in_list = 1;
+                unsorted_patterns[used_index].bit_pattern = pattern;
                 if (last_index != END_OF_LIST)
-                    used_list[last_index].next = used_index;
+                    unsorted_patterns[last_index].next = used_index;
                 else
                     first_used = used_index;
                 last_index = used_index;
@@ -183,9 +182,9 @@ template<int NetSize>
     int true_index = 0;
     int n = 0;
 
-    for (int i = first_used; i != END_OF_LIST; i = used_list[i].next) {
+    for (int i = first_used; i != END_OF_LIST; i = unsorted_patterns[i].next) {
         if (n == rand_index) {
-            true_index = static_cast<int>(used_list[i].bit_pattern);
+            true_index = static_cast<int>(unsorted_patterns[i].bit_pattern);
             break;
         }
         n++;
@@ -198,7 +197,7 @@ template<int NetSize>
 
 template<int NetSize>
 void State<NetSize>::print_state() const {
-    for (const auto& elem : used_list) {
+    for (const auto& elem : unsorted_patterns) {
         std::cout << elem.bit_pattern << ':' << static_cast<int>(elem.in_list) << std::endl;
     }
     std::cout << "First used: " << first_used << std::endl;
@@ -310,8 +309,8 @@ int State<NetSize>::find_successors(std::vector<std::vector<int>>& succ_ops, int
     }
 
     // Check all unsorted patterns to see which operations would affect them
-    for (int i = first_used; i != END_OF_LIST; i = used_list[i].next) {
-        PatternType pattern = used_list[i].bit_pattern;
+    for (int i = first_used; i != END_OF_LIST; i = unsorted_patterns[i].next) {
+        PatternType pattern = unsorted_patterns[i].bit_pattern;
         for (int n1 = 0; n1 < net_size - 1; ++n1) {
             for (int n2 = n1 + 1; n2 < net_size; ++n2) {
                 if (((pattern >> n1) & 1) == 0 && ((pattern >> n2) & 1) == 1) {

@@ -48,7 +48,7 @@ static int rand_int(int n) {
 The `is_sorted()` check is necessary for the **NEW pattern** after applying the comparator transformation, not the old pattern. When we transform pattern A into pattern B by applying a comparator, pattern B might be sorted even though pattern A wasn't. The `in_list` check only tells us if pattern B was already in the list (duplicate), but doesn't tell us if pattern B is now sorted.
 
 **If removed:**
-- Sorted patterns can end up in `used_list`
+- Sorted patterns can end up in `unsorted_patterns`
 - `do_random_transition()` will try to select operations from an empty `allowed_ops` list
 - Results in segmentation fault when accessing `allowed[rand_op]` on empty vector
 
