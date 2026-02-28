@@ -26,11 +26,15 @@ public:
         int next;                  // Index of next element in linked list, -1 if end
     };
 
-    // Linked list tracking unsorted input patterns.
-    // Uses intrusive linked list stored in used_list for O(1) removal/insertion.
+    // Intrusive linked list tracking unsorted input patterns
+    // INVARIANT: used_list[i].in_list == 1  <=>  pattern i is currently unsorted
+    // INVARIANT: first_used == END_OF_LIST  <=>  num_unsorted == 0
+    // INVARIANT: num_unsorted == count of nodes in linked list
+    // PERFORMANCE: Stored in contiguous vector for cache efficiency
+    // NOTE: Name is historical; contains ONLY unsorted patterns despite "used" name
     std::vector<ListElement> used_list;
-    int first_used = END_OF_LIST;       // Index of first unsorted pattern in linked list
-    int num_unsorted = 0;      // Number of patterns still needing to be sorted
+    int first_used = END_OF_LIST;
+    int num_unsorted = 0;
 
     // Sequence of compare-exchange operations applied so far.
     std::vector<Operation> operations;
