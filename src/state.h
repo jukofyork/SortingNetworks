@@ -85,7 +85,7 @@ private:
 
     static int rand_int(int n) {
         if (n <= 0) return 0;
-        std::uniform_int_distribution<int> dist(0, n);
+        std::uniform_int_distribution<int> dist(0, n - 1);
         return dist(get_thread_rng());
     }
 };
